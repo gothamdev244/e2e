@@ -34,5 +34,6 @@ describe('unsupportedRuntimeMessage', () => {
       'e2e runs on Node.js: Bun 1.4.2 reports Node.js 24.19.0 but has no module.registerHooks, which e2e\'s TypeScript loader needs. Run the CLI with Node.js: npx e2e, or bunx e2e (without --bun).',
     );
     expect(unsupportedRuntimeMessage({ node: '24.19.0' }, true)).toBeUndefined();
+    expect(unsupportedRuntimeMessage({ node: '26.3.0', deno: '2.9.4' }, true)).toBe('e2e runs on Node.js, not Deno 2.9.4: run the CLI with Node.js (npx e2e).');
   });
 });

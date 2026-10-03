@@ -61,14 +61,16 @@ function unsupportedNodeMessage(current: string): string | undefined {
  * Explains a runtime e2e cannot run on, or undefined for one it can: a
  * Node.js outside `SUPPORTED_NODE_RANGE`, or a runtime that reports a
  * supported Node.js version without Node.js's `module.registerHooks` (Bun),
- * which e2e's TypeScript loader runs on.
+ * which e2e's TypeScript loader runs on, or Deno.
  */
 export function unsupportedRuntimeMessage(
-  versions: Pick<NodeJS.ProcessVersions, 'node'> & { readonly bun?: string } = process.versions,
+  versions: Pick<NodeJS.ProcessVersions, 'node'> & { readonly bun?: string; readonly deno?: string } = process.versions,
   hasRegisterHooks: boolean = typeof nodeModule.registerHooks === 'function',
 ): string | undefined {
+  // Deno implements module.registerHooks, but not the require() of a native addon from inside a hook that oxc needs.
+  if (versions.deno !== undefined) return `e2e runs on Node.js, not Deno ${versions.deno}: run the CLI with Node.js (npx e2e).`;
   const node = unsupportedNodeMessage(versions.node);
   if (node !== undefined || hasRegisterHooks) return node;
-  const runtime = versions.bun === undefined ? 'This runtime' : `Bun ${versions.bun}`;
+  const runtime = versions.bun !== undefined ? `Bun ${versions.bun}` : 'This runtime';
   return `e2e runs on Node.js: ${runtime} reports Node.js ${versions.node} but has no module.registerHooks, which e2e's TypeScript loader needs. Run the CLI with Node.js: npx e2e, or bunx e2e (without --bun).`;
 }

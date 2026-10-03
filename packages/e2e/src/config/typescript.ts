@@ -35,12 +35,13 @@ function oxc(): { transform: typeof OxcTransform; parser: typeof OxcParser } {
   try {
     compiler = { transform: ownRequire('oxc-transform') as typeof OxcTransform, parser: ownRequire('oxc-parser') as typeof OxcParser };
   } catch (cause) {
-    const binding = `@oxc-transform/binding-${process.platform}-${process.arch}`;
-    throw new InfrastructureError(
-      'TYPESCRIPT_COMPILER_UNAVAILABLE',
-      `e2e compiles TypeScript with oxc, whose native binding for ${process.platform}-${process.arch} (${binding}*) is not installed. npm skips it with --omit=optional, or when package-lock.json was written on another platform (npm/cli#4828): install again without --omit=optional, or delete package-lock.json and node_modules and run npm install`,
-      { cause },
-    );
+    const reason = (cause instanceof Error ? cause.message : String(cause)).split('\n')[0];
+    // napi-rs's loader says so when no platform package is installed.
+    const missingBinding = /Cannot find native binding/.test(String((cause as Error | undefined)?.message));
+    const fix = missingBinding
+      ? `its native binding for ${process.platform}-${process.arch} (@oxc-transform/binding-${process.platform}-${process.arch}*) is not installed. npm skips it with --omit=optional, or when package-lock.json was written on another platform (npm/cli#4828): install again without --omit=optional, or delete package-lock.json and node_modules and run npm install`
+      : `it could not be loaded (${reason})`;
+    throw new InfrastructureError('TYPESCRIPT_COMPILER_UNAVAILABLE', `e2e compiles TypeScript with oxc, and ${fix}`, { cause });
   }
   return compiler;
 }

@@ -146,6 +146,16 @@ describe('resolve', () => {
     expect(resolveFrom(url('tests/example.e2e.ts'), '#js/sub', { exports: withQuery }).asked).toEqual(['#js/sub', `${url('internal/sub.ts')}?v=1#h`]);
   });
 
+  it('moves a # import a resolver earlier in the chain mapped to a missing file onto the TypeScript behind it, as Yarn PnP needs', () => {
+    const asked: string[] = [];
+    const resolution = resolve('#shared/sub', { conditions: IMPORT, importAttributes: {}, parentURL: url('tests/example.e2e.ts') }, (next) => {
+      asked.push(next);
+      return { url: next === '#shared/sub' ? url('internal/sub') : next, format: null };
+    });
+    expect(asked).toEqual(['#shared/sub', url('internal/sub.ts')]);
+    expect(resolution.url).toBe(url('internal/sub.ts'));
+  });
+
   it.each([
     ['from JavaScript', 'tests/plain.js', { '#js/sub': url('internal/sub.js') }, '#js/sub'],
     ['with no TypeScript behind it', 'tests/example.e2e.ts', { '#gone': url('internal/gone.js') }, '#gone'],

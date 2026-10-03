@@ -176,25 +176,36 @@ function inGraph(how: Reach, parentURL: string | undefined, resolution: Resoluti
   return { ...resolution, url: file.href };
 }
 
+/** The file TypeScript's rules find for `missing`, a target URL that is not on disk, as a URL with the target's query and hash. */
+function typeScriptFileFor(missing: URL, view: ProjectView): string | undefined {
+  const target = fileURLToPath(missing);
+  const file = typeScriptFile(target, view);
+  // The file keeps the target's query and hash, which are part of its module identity.
+  return file === undefined || file === target ? undefined : `${pathToFileURL(file).href}${missing.search}${missing.hash}`;
+}
+
 /**
- * Node.js's resolution of `request`, a `#` import or package export written
- * in a compiled file, retried on the file TypeScript's rules find for the
- * target it did not find (`x.ts` for a mapped `./x.js` or `./x`, a
- * directory's index). An `import` only: Node.js reports the missing
- * target's URL on that error, and not on `require()`'s.
+ * The resolution of `request`, a `#` import or package export written in a
+ * compiled file, moved to the file TypeScript's rules find when the target
+ * the map names is not there (`x.ts` for a mapped `./x.js` or `./x`, a
+ * directory's index). Node.js throws for such a target, naming it on the
+ * error of an `import` (not of a `require()`); a resolver earlier in the
+ * chain may return it anyway (Yarn PnP's does), to fail when it loads.
  */
 function resolveExport(request: string, context: ResolveHookContext, nextResolve: NextResolve, view: ProjectView): Resolution {
+  let resolution: Resolution;
   try {
-    return nextResolve(request, context);
+    resolution = nextResolve(request, context);
   } catch (error) {
     const { code, url } = error as { code?: unknown; url?: unknown };
-    const missing = code === 'ERR_MODULE_NOT_FOUND' && typeof url === 'string' && url.startsWith('file:') ? new URL(url) : undefined;
-    const target = missing === undefined ? undefined : fileURLToPath(missing);
-    const file = target === undefined ? undefined : typeScriptFile(target, view);
-    if (missing === undefined || file === undefined || file === target) throw error;
-    // The file keeps the target's query and hash, which are part of its module identity.
-    return nextResolve(`${pathToFileURL(file).href}${missing.search}${missing.hash}`, context);
+    const file = code === 'ERR_MODULE_NOT_FOUND' && typeof url === 'string' && url.startsWith('file:') ? typeScriptFileFor(new URL(url), view) : undefined;
+    if (file === undefined) throw error;
+    return nextResolve(file, context);
   }
+  if (!resolution.url.startsWith('file:')) return resolution;
+  const target = new URL(resolution.url);
+  const file = view.isFile(fileURLToPath(target)) ? undefined : typeScriptFileFor(target, view);
+  return file === undefined ? resolution : nextResolve(requires(context) ? fileURLToPath(file) : file, context);
 }
 
 export const resolve: ResolveHookSync = (specifier, context, nextResolve) => {
