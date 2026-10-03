@@ -123,6 +123,7 @@ These appear in terminal output and in the report as plain string codes.
 | `WORKER_CRASH` | A worker exited during a specific test | infrastructure | 3 |
 | `WORKER_ENTRY_MISSING` | The worker entry module could not be resolved. Packaging fault. | infrastructure | 3 |
 | `NODE_UNSUPPORTED` | The running Node.js is outside `^22.22.3 \|\| >=24.8.0`, where e2e's TypeScript loader cannot rely on Node.js's module hooks. The CLI checks this before it starts and exits 2 with the same sentence; the loader checks it again where it registers its hooks, for a host that runs e2e's runner without the CLI | infrastructure | 3 |
+| `TYPESCRIPT_COMPILER_UNAVAILABLE` | oxc's native binding for this platform (`@oxc-transform/binding-<platform>-<arch>`) is not installed, so e2e cannot compile TypeScript. npm leaves it out with `--omit=optional`, or when `package-lock.json` was written on another platform (npm/cli#4828): install again without `--omit=optional`, or delete `package-lock.json` and `node_modules` and run `npm install` | infrastructure | 3 |
 | `ENGINE_FAILURE` | Any engine fault with no more specific mapping | infrastructure | 3 |
 | `WORKER_PROTOCOL` | A worker reported a unit other than the one it was running, or started an attempt while another was still running | infrastructure | 3 |
 | `SESSION_KEY_INVALID` | A worker received a session key that is not 32 bytes. Packaging or IPC fault. | infrastructure | 3 |

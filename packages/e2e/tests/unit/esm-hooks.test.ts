@@ -3,7 +3,7 @@ import type { LoadHookContext, ResolveHookContext } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { load, resolve } from '../../src/config/esm-hooks.ts';
 
 type Resolution = { url: string; format?: string | null | undefined };
@@ -74,6 +74,8 @@ beforeAll(() => {
     'lib/data.json': '{}',
     'lib/comp.jsx': '',
     'lib/dir/index.ts': '',
+    'lib/pkg/package.json': JSON.stringify({ main: 'src/entry' }),
+    'lib/pkg/src/entry.ts': '',
     'node_modules/dep/index.ts': '',
     'node_modules/dep/helper.ts': '',
   });
@@ -94,6 +96,7 @@ describe('resolve', () => {
     ['an extensionless JavaScript import', '../lib/util', 'lib/util.js'],
     ['an extensionless JSON import', '../lib/data', 'lib/data.json'],
     ['a directory to its index', '../lib/dir', 'lib/dir/index.ts'],
+    ["a directory to the TypeScript its package.json main names", '../lib/pkg', 'lib/pkg/src/entry.ts'],
     ['a tsconfig paths alias', '@lib/helper', 'lib/helper.ts'],
     ['a tsconfig baseUrl import', 'lib/view', 'lib/view.tsx'],
   ])('resolves %s from TypeScript', (_case, specifier, file) => {
@@ -131,9 +134,14 @@ describe('resolve', () => {
     expect(resolution).toEqual({ url: url(file), format: 'module' });
   });
 
-  it('retries a # import from TypeScript that maps to a missing ./x.js on x.ts', () => {
-    const exports = { '#js/sub': url('internal/sub.js') };
+  it('retries a # import from TypeScript that maps to a missing ./x.js or ./x on x.ts, or a directory on its index', () => {
+    const exports = { '#js/sub': url('internal/sub.js'), '#bare': url('internal/sub'), '#dir': url('lib/dir') };
     expect(resolveFrom(url('tests/example.e2e.ts'), '#js/sub', { exports }).asked).toEqual(['#js/sub', url('internal/sub.ts')]);
+    expect(resolveFrom(url('tests/example.e2e.ts'), '#bare', { exports }).asked).toEqual(['#bare', url('internal/sub.ts')]);
+    expect(resolveFrom(url('tests/example.e2e.ts'), '@ws/lib/sub', { exports: { '@ws/lib/sub': url('internal/sub') } }).asked).toEqual([
+      '@ws/lib/sub',
+      url('internal/sub.ts'),
+    ]);
     const withQuery = { '#js/sub': `${url('internal/sub.js')}?v=1#h` };
     expect(resolveFrom(url('tests/example.e2e.ts'), '#js/sub', { exports: withQuery }).asked).toEqual(['#js/sub', `${url('internal/sub.ts')}?v=1#h`]);
   });
@@ -141,7 +149,7 @@ describe('resolve', () => {
   it.each([
     ['from JavaScript', 'tests/plain.js', { '#js/sub': url('internal/sub.js') }, '#js/sub'],
     ['with no TypeScript behind it', 'tests/example.e2e.ts', { '#gone': url('internal/gone.js') }, '#gone'],
-    ['to an extensionless target', 'tests/example.e2e.ts', { '#bare': url('internal/sub') }, '#bare'],
+    ['to an extensionless target from JavaScript', 'tests/plain.js', { '#bare': url('internal/sub') }, '#bare'],
   ])('leaves a # import %s missing as Node.js reports it', (_case, parent, exports, specifier) => {
     expect(() => resolveFrom(url(parent), specifier, { exports })).toThrow('Cannot find module');
   });
@@ -217,6 +225,34 @@ describe('fresh module graphs', () => {
     expect(resolveFrom(fromGraph('lib/cjs.cts'), './helper', { conditions: REQUIRE }).resolution.url).toBe(url('lib/helper.ts'));
   });
 
+  it('hands a file to the project a solution-style tsconfig.json references that includes it', () => {
+    write({
+      'vite/tsconfig.json': JSON.stringify({ files: [], references: [{ path: './tsconfig.app.json' }, { path: './tsconfig.node.json' }] }),
+      'vite/tsconfig.app.json': JSON.stringify({ include: ['src'], compilerOptions: { paths: { '@/*': ['./src/*'] } } }),
+      'vite/tsconfig.node.json': JSON.stringify({ include: ['vite.config.ts'] }),
+      'vite/src/main.ts': '',
+      'vite/src/util.ts': '',
+    });
+    expect(resolveFrom(url('vite/src/main.ts'), '@/util').asked).toEqual([url('vite/src/util.ts')]);
+  });
+
+  it('warns once about a tsconfig.json it cannot read and resolves without it', () => {
+    write({ 'broken/tsconfig.json': JSON.stringify({ extends: '@tsconfig/not-installed/tsconfig.json', compilerOptions: { paths: { '@x': ['./x.ts'] } } }), 'broken/main.ts': '', 'broken/x.ts': '' });
+    const warnings: string[] = [];
+    const emitWarning = vi.spyOn(process, 'emitWarning').mockImplementation((warning) => {
+      warnings.push(String(warning));
+    });
+    try {
+      expect(resolveFrom(url('broken/main.ts'), './x').asked).toEqual([url('broken/x.ts')]);
+      expect(() => resolveFrom(url('broken/main.ts'), '@x')).toThrow('Cannot find module');
+      expect(() => resolveFrom(url('broken/main.ts'), '@x')).toThrow('Cannot find module');
+    } finally {
+      emitWarning.mockRestore();
+    }
+    expect(warnings.filter((message) => message.includes(path.join(project, 'broken', 'tsconfig.json')))).toHaveLength(1);
+    expect(warnings.find((message) => message.includes('broken'))).toContain('@tsconfig/not-installed/tsconfig.json');
+  });
+
   it('reads tsconfig.json afresh for a new graph and once for every other load', () => {
     write({ 'graph/tsconfig.json': JSON.stringify({ compilerOptions: { paths: { '@x': ['./a.ts'] } } }), 'graph/a.ts': '', 'graph/b.ts': '', 'graph/main.ts': '' });
     const parent = (graph: string | undefined): string => `${url('graph/main.ts')}${graph === undefined ? '' : `?e2e-graph=${graph}`}`;
@@ -264,8 +300,14 @@ describe('load', () => {
     expect(String(load(url('jsx/node_modules/dep/view.tsx'), context(), nextFromDisk([])).source)).toContain('React.createElement("b"');
   });
 
+  it('reads a file a chained loader handed on without source, as CommonJS loaders do', () => {
+    write({ 'lib/plain-cts.cts': 'export = { v: "h" + "c" };\n' });
+    const loaded = load(url('lib/plain-cts.cts'), context(), () => ({ format: 'commonjs', source: undefined }));
+    expect(String(loaded.source)).toContain('module.exports = { v: "h" + "c" }');
+  });
+
   it('loads JSON imported without a type attribute as a module exporting the parsed file', async () => {
-    write({ 'lib/settings.json': '﻿{ "__proto__": { "polluted": true }, "answer": 42 }' });
+    write({ 'lib/settings.json': '\uFEFF{ "__proto__": { "polluted": true }, "answer": 42 }' });
     const asked: LoadHookContext[] = [];
     const loaded = load(url('lib/settings.json'), context(), nextFromDisk(asked));
     expect(loaded.format).toBe('module');

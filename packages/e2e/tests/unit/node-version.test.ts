@@ -1,8 +1,10 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { importedCommonJsRequireRunsHooks, SUPPORTED_NODE_RANGE, unsupportedNodeMessage } from '../../src/internal/node-version.ts';
+import { SUPPORTED_NODE_RANGE, unsupportedRuntimeMessage } from '../../src/internal/node-version.ts';
 
-describe('unsupportedNodeMessage', () => {
+const unsupportedNodeMessage = (node: string): string | undefined => unsupportedRuntimeMessage({ node }, true);
+
+describe('unsupportedRuntimeMessage', () => {
   it('mirrors the engines field of every published package', () => {
     expect(SUPPORTED_NODE_RANGE).toBe('^22.22.3 || >=24.8.0');
     const packages = new URL('../../../', import.meta.url);
@@ -27,15 +29,10 @@ describe('unsupportedNodeMessage', () => {
     );
   });
 
-  it.each([
-    ['22.23.3', false],
-    ['24.17.0', false],
-    ['24.18.0', true],
-    ['25.9.0', false],
-    ['26.1.0', false],
-    ['26.2.0', true],
-    ['27.0.0', true],
-  ])('on Node.js %s, the require of a CommonJS module an ES module imported runs hooks: %s', (version, expected) => {
-    expect(importedCommonJsRequireRunsHooks(version)).toBe(expected);
+  it('refuses a runtime that reports a supported Node.js without module.registerHooks, naming Bun', () => {
+    expect(unsupportedRuntimeMessage({ node: '24.19.0', bun: '1.4.2' }, false)).toBe(
+      'e2e runs on Node.js: Bun 1.4.2 reports Node.js 24.19.0 but has no module.registerHooks, which e2e\'s TypeScript loader needs. Run the CLI with Node.js: npx e2e, or bunx e2e (without --bun).',
+    );
+    expect(unsupportedRuntimeMessage({ node: '24.19.0' }, true)).toBeUndefined();
   });
 });

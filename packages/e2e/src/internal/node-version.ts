@@ -1,10 +1,11 @@
 /**
- * The Node.js releases e2e runs on, and the module-hook fixes it depends on,
- * as sets of release ranges. The CLI checks the floor before it loads
+ * The Node.js releases e2e runs on, as a set of release ranges. The CLI checks the floor before it loads
  * anything else: package managers only warn about `engines`, so an
  * unsupported runtime would otherwise surface as an unrelated TypeError deep
  * inside a run.
  */
+
+import nodeModule from 'node:module';
 
 type Version = readonly [major: number, minor: number, patch: number];
 
@@ -46,27 +47,28 @@ const SUPPORTED: readonly ReleaseRange[] = [
   { since: [24, 8, 0] },
 ];
 
-/**
- * Where the `require` Node.js hands a CommonJS module an ES module imported
- * runs resolve hooks (nodejs/node#62920, in 24.18.0 and 26.2.0). Before it,
- * the loader gives compiled CommonJS a `require` that does.
- */
-const IMPORTED_COMMONJS_REQUIRE_RUNS_HOOKS: readonly ReleaseRange[] = [
-  { line: 24, since: [24, 18, 0] },
-  { since: [26, 2, 0] },
-];
-
 /** `engines.node` in package.json; a unit test keeps the two in step. */
 export const SUPPORTED_NODE_RANGE = SUPPORTED.map((range) => `${'line' in range ? '^' : '>='}${range.since.join('.')}`).join(' || ');
 
-/** Explains an unsupported runtime, or undefined when `current` is in `SUPPORTED_NODE_RANGE`. */
-export function unsupportedNodeMessage(current: string): string | undefined {
+/** Explains a Node.js outside `SUPPORTED_NODE_RANGE`, or undefined for one inside it. */
+function unsupportedNodeMessage(current: string): string | undefined {
   if (within(current, SUPPORTED)) return undefined;
   const required = SUPPORTED.map((range) => ('line' in range ? `${range.since.join('.')} or newer on Node.js ${range.line}` : `${range.since.join('.')} or newer`)).join(', or ');
   return `e2e requires Node.js ${required}; this is Node.js ${current.replace(/^v/, '')}. Upgrade Node.js, or switch versions with your version manager (nvm install 24, fnm install 24, volta install node@24).`;
 }
 
-/** Whether the `require` of a CommonJS module an ES module imported runs resolve hooks on Node.js `version`. */
-export function importedCommonJsRequireRunsHooks(version: string = process.versions.node): boolean {
-  return within(version, IMPORTED_COMMONJS_REQUIRE_RUNS_HOOKS);
+/**
+ * Explains a runtime e2e cannot run on, or undefined for one it can: a
+ * Node.js outside `SUPPORTED_NODE_RANGE`, or a runtime that reports a
+ * supported Node.js version without Node.js's `module.registerHooks` (Bun),
+ * which e2e's TypeScript loader runs on.
+ */
+export function unsupportedRuntimeMessage(
+  versions: Pick<NodeJS.ProcessVersions, 'node'> & { readonly bun?: string } = process.versions,
+  hasRegisterHooks: boolean = typeof nodeModule.registerHooks === 'function',
+): string | undefined {
+  const node = unsupportedNodeMessage(versions.node);
+  if (node !== undefined || hasRegisterHooks) return node;
+  const runtime = versions.bun === undefined ? 'This runtime' : `Bun ${versions.bun}`;
+  return `e2e runs on Node.js: ${runtime} reports Node.js ${versions.node} but has no module.registerHooks, which e2e's TypeScript loader needs. Run the CLI with Node.js: npx e2e, or bunx e2e (without --bun).`;
 }

@@ -10,7 +10,7 @@ import { execFile } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify, stripVTControlCharacters } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -62,7 +62,8 @@ import plain = require('./plain');
 import alias = require('@lib/alias');
 import helper = require('./cjs-helper.cjs');
 const kind: string = path.extname('x.cts');
-export = { cts: kind, stats: null as Stats | null, required: [plain.plain, alias.alias, helper.decorated(), helper.strict] };
+export = { cts: kind, stats: null as Stats | null, required: [plain.plain, alias.alias, helper.decorated(), helper.strict], resolved: require.resolve('./plain') };
+// A trailing comment, which oxc prints after its CommonJS module marker.
 `,
   'lib/cjs-helper.cts': `#!/usr/bin/env node
 'use strict';
@@ -98,6 +99,9 @@ export const size = Size.M;
   'packages/core/package.json': JSON.stringify({ name: '@scope/core', exports: { '.': './src/index.ts' } }),
   'packages/core/src/index.ts': "import { pad } from './pad.js';\n\nexport const month = (n: number): string => pad(n);\n",
   'packages/core/src/pad.ts': "export const pad = (n: number): string => String(n).padStart(2, '0');\n",
+  // Export and import maps that name TypeScript sources without an extension.
+  'packages/noext/package.json': JSON.stringify({ name: '@scope/noext', type: 'module', exports: { './*': './src/*' } }),
+  'packages/noext/src/foo.ts': "export const foo = 'no-extension export';\n",
   'tests/features.e2e.ts': `import { expect, test } from 'e2e';
 import type { E2EConfig } from 'e2e';
 import { alias } from '@lib/alias';
@@ -117,17 +121,21 @@ import { sub as viaJs } from '#js/sub';
 import data from '../lib/data.json';
 import attributed from '../lib/data.json' with { type: 'json' };
 import { month } from '@scope/core';
+import { foo } from '@scope/noext/foo';
+import { foo as fooImport } from '#noext/foo';
 
 const awaited = await Promise.resolve('top-level await');
 const typed: E2EConfig | undefined = undefined;
 
 test('imports resolve', () => {
   expect([alias, base, plain, suffixed, index, sub, viaJs, month(7)]).toEqual(['paths', 'baseUrl', 'extensionless', 'js-suffix', 'dir-index', 'hash-import', 'hash-import', '07']);
+  expect([foo, fooImport]).toEqual(['no-extension export', 'no-extension export']);
 });
 
 test('module formats load', () => {
   expect([mts, cjs.cts, data.answer, attributed.answer]).toEqual(['mts', '.cts', 42, 42]);
   expect(cjs.required).toEqual(['extensionless', 'paths', ['Decorated', 'Decorated'], true]);
+  expect(cjs.resolved).toMatch(/lib[\\\\/]plain\\.ts$/);
   expect(comp()).toBe('jsx file');
   const stackOf = (boom: () => never): string => {
     try {
@@ -166,20 +174,24 @@ function write(files: Readonly<Record<string, string>>): void {
 
 /** A project whose package.json is `manifest`, with e2e and a workspace package linked into node_modules. */
 function createProject(manifest: Record<string, unknown>): void {
-  write({ ...FILES, 'package.json': JSON.stringify({ name: 'loader-fixture', imports: { '#internal/*': './internal/*.ts', '#js/*': './internal/*.js' }, ...manifest }) });
+  const imports = { '#internal/*': './internal/*.ts', '#js/*': './internal/*.js', '#noext/*': './packages/noext/src/*' };
+  write({ ...FILES, 'package.json': JSON.stringify({ name: 'loader-fixture', imports, ...manifest }) });
   mkdirSync(path.join(dir, 'node_modules', '@scope'), { recursive: true });
   symlinkSync(PACKAGE_ROOT, path.join(dir, 'node_modules', 'e2e'), 'junction');
-  symlinkSync(path.join(dir, 'packages', 'core'), path.join(dir, 'node_modules', '@scope', 'core'), 'junction');
+  for (const name of ['core', 'noext']) symlinkSync(path.join(dir, 'packages', name), path.join(dir, 'node_modules', '@scope', name), 'junction');
 }
 
-/** Runs the CLI in the project; resolves with stdout, colors stripped (CI turns them on), whatever the exit code. */
-async function runCli(...args: string[]): Promise<{ code: number; stdout: string }> {
+/**
+ * Runs the CLI in the project, with `env` added to this process's; resolves
+ * with its output, colors stripped (CI turns them on), whatever the exit code.
+ */
+async function runCli(args: readonly string[], env: NodeJS.ProcessEnv = {}): Promise<{ code: number; stdout: string; stderr: string }> {
   try {
-    const { stdout } = await execFileAsync(process.execPath, [CLI, 'run', '--no-cache', ...args], { cwd: dir });
-    return { code: 0, stdout: stripVTControlCharacters(stdout) };
+    const { stdout, stderr } = await execFileAsync(process.execPath, [CLI, 'run', '--no-cache', ...args], { cwd: dir, env: { ...process.env, ...env } });
+    return { code: 0, stdout: stripVTControlCharacters(stdout), stderr };
   } catch (error) {
-    const failed = error as { code: number; stdout: string };
-    return { code: failed.code, stdout: stripVTControlCharacters(failed.stdout) };
+    const failed = error as { code: number; stdout: string; stderr: string };
+    return { code: failed.code, stdout: stripVTControlCharacters(failed.stdout), stderr: failed.stderr };
   }
 }
 
@@ -198,14 +210,14 @@ describe('the TypeScript loader', () => {
     ['a package without "type": "module"', {}],
   ])('runs config and tests in %s across worker processes', async (_case, manifest) => {
     createProject(manifest);
-    const { code, stdout } = await runCli('tests/features.e2e.ts', '--workers', '2');
+    const { code, stdout } = await runCli(['tests/features.e2e.ts', '--workers', '2']);
     expect(stdout).toContain('3 passed');
     expect(code).toBe(0);
   });
 
   it('points a failure and its test at the TypeScript source', async () => {
     createProject({ type: 'module' });
-    const { code, stdout } = await runCli('tests/failing');
+    const { code, stdout } = await runCli(['tests/failing']);
     expect(code).toBe(1);
     expect(stdout).toContain('   7|   expect(shape.n).toBe(2);');
     const report = JSON.stringify(JSON.parse(readFileSync(path.join(dir, '.e2e', 'report.json'), 'utf8')));
@@ -215,6 +227,50 @@ describe('the TypeScript loader', () => {
       expect(report).toContain(`"source":{"file":"${file}","line":7,"column":19}`);
     }
     expect(report).toMatch(/"source":\{"file":"tests\/failing\/declared\.e2e\.ts","line":3,"column":\d+\}/);
+  });
+
+  // Node.js 24.8.0 to 24.11.0 refuses a load result with no source before e2e's hook sees it.
+  const rejectsMissingSource = /^24\.(?:[89]|10)\.|^24\.11\.0$/.test(process.versions.node);
+  it.skipIf(rejectsMissingSource)('compiles a .cts a loader earlier in the chain hands on without source, as Yarn PnP does', async () => {
+    createProject({ type: 'module' });
+    const loader = `export async function load(url, context, nextLoad) {\n  if (url.split('?')[0].endsWith('.cts')) return { format: 'commonjs', source: undefined, shortCircuit: true };\n  return nextLoad(url, context);\n}\n`;
+    write({ 'chained-loader.mjs': loader, 'register.mjs': "import { register } from 'node:module';\nregister('./chained-loader.mjs', import.meta.url);\n" });
+    const { code, stdout } = await runCli(['tests/features.e2e.ts'], { NODE_OPTIONS: `--import ${pathToFileURL(path.join(dir, 'register.mjs')).href}` });
+    expect(stdout).toContain('3 passed');
+    expect(code).toBe(0);
+  });
+
+  it('warns about a tsconfig.json whose extends is not installed, and runs without it', async () => {
+    createProject({ type: 'module' });
+    write({
+      'tsconfig.json': JSON.stringify({ extends: '@tsconfig/node22/tsconfig.json' }),
+      'tests/plain.e2e.ts': "import { expect, test } from 'e2e';\n\ntest('runs', () => {\n  expect(1 as number).toBe(1);\n});\n",
+    });
+    const { code, stdout, stderr } = await runCli(['tests/plain.e2e.ts']);
+    expect(stdout).toContain('1 passed');
+    expect(code).toBe(0);
+    expect(stderr).toContain(`e2e ignores ${path.join(realpathSync(dir), 'tsconfig.json')}, which it cannot read`);
+    expect(stderr).toContain('@tsconfig/node22/tsconfig.json');
+  });
+
+  it.each([
+    ['an auto-accessor', { 'lib/accessor.ts': 'export class A {\n  accessor w = 5;\n}\n' }, '../lib/accessor', 'lib/accessor.ts:2:3: `accessor` class fields (auto-accessors) are not supported'],
+    [
+      'a type imported as a value for decorator metadata',
+      {
+        'tsconfig.json': JSON.stringify({ compilerOptions: { experimentalDecorators: true, emitDecoratorMetadata: true } }),
+        'lib/types.ts': 'export interface Options { a: number }\n',
+        'lib/svc.ts': "import { Options } from './types';\n\nconst Prop = (): PropertyDecorator => () => {};\n\nexport class Svc {\n  @Prop() options!: Options;\n}\n",
+      },
+      '../lib/svc',
+      "lib/svc.ts:1); if Options is a type (an interface or a type alias), import it with import type { Options }",
+    ],
+  ])('names the line and the fix for %s', async (_case, files, specifier, message) => {
+    createProject({ type: 'module' });
+    write({ ...files, 'tests/uses.e2e.ts': `import { test } from 'e2e';\nimport '${specifier}';\n\ntest('loads', () => {});\n` });
+    const { code, stdout } = await runCli(['tests/uses.e2e.ts']);
+    expect(code).toBe(2);
+    expect(stdout.replaceAll('\n', ' ')).toContain(message);
   });
 
   it('names the file, line, and column of a syntax error in the config', async () => {

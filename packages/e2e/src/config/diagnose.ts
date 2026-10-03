@@ -7,6 +7,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { withHint } from '../internal/errors.ts';
 import { addDevDependencyCommand, detectPackageManager } from '../internal/package-manager.ts';
 import { didYouMean, suggest } from '../internal/suggest.ts';
@@ -69,7 +70,20 @@ interface Manifest {
  */
 export function explainModuleError(cause: unknown, importer: string): string {
   const message = cause instanceof Error ? cause.message : String(cause);
-  return withHint(message, moduleErrorHint(message, (cause as { code?: unknown } | null)?.code, importer));
+  return withHint(`${message}${syntaxErrorLocation(cause, message)}`, moduleErrorHint(message, (cause as { code?: unknown } | null)?.code, importer));
+}
+
+/**
+ * ` (file:line)` for a SyntaxError Node.js raised linking or parsing a
+ * module, which names the line only in the first line of its stack, not in
+ * its message; empty for any other error.
+ */
+function syntaxErrorLocation(cause: unknown, message: string): string {
+  if (!(cause instanceof SyntaxError)) return '';
+  const located = /^(.+?):(\d+)\n/.exec(cause.stack ?? '');
+  if (located === null || message.includes(located[1]!)) return '';
+  const file = located[1]!.startsWith('file:') ? fileURLToPath(located[1]!) : located[1]!;
+  return ` (${file}:${located[2]})`;
 }
 
 function moduleErrorHint(message: string, code: unknown, importer: string): string {
@@ -123,7 +137,10 @@ function subpathHint(subpath: string, manifestPath: string): string {
 function missingExportHint(specifier: string, exportName: string): string {
   const removed = REMOVED_EXPORTS[specifier]?.[exportName];
   if (removed !== undefined) return removed;
-  if (specifier !== 'e2e') return '';
+  if (specifier !== 'e2e') {
+    if (!/^[A-Z]/.test(exportName)) return '';
+    return `if ${exportName} is a type (an interface or a type alias), import it with import type { ${exportName} }: e2e compiles each file on its own, without type information, so an import of a type has to say so, as under TypeScript's isolatedModules; with emitDecoratorMetadata, the same holds for a type a decorated member's annotation names`;
+  }
   const suggestion = suggest(exportName, RUNTIME_EXPORTS);
   if (suggestion !== undefined) return `did you mean "${suggestion}"?`;
   return /^[A-Z]/.test(exportName)

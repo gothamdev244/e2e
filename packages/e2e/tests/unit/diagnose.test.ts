@@ -78,6 +78,14 @@ describe('explainModuleError', () => {
     expect(explainModuleError(other, importer)).toBe(other.message);
   });
 
+  it('names the importing line and the import type fix for a type imported as a value', () => {
+    const cause = new SyntaxError("The requested module './types' does not provide an export named 'Options'");
+    cause.stack = `${path.join(dir, 'svc.ts')}:1\nimport { Options } from './types';\n         ^\nSyntaxError: ${cause.message}`;
+    expect(explainModuleError(cause, importer)).toBe(
+      `The requested module './types' does not provide an export named 'Options' (${path.join(dir, 'svc.ts')}:1); if Options is a type (an interface or a type alias), import it with import type { Options }: e2e compiles each file on its own, without type information, so an import of a type has to say so, as under TypeScript's isolatedModules; with emitDecoratorMetadata, the same holds for a type a decorated member's annotation names`,
+    );
+  });
+
   it('names the removal for a dropped export without a release number, never the type-only import that fails the same way', () => {
     const missing = (specifier: string, name: string) =>
       new SyntaxError(`The requested module '${specifier}' does not provide an export named '${name}'`);

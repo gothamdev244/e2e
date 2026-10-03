@@ -22,6 +22,9 @@ const KINDS: Record<string, CompiledExtension> = {
   '.cts': { lang: 'ts', format: 'commonjs', written: '.cjs' },
 };
 
+/** Node.js options that run compiled output as e2e does: under its loader, which compiled CommonJS calls into, with source maps on. */
+const UNDER_THE_LOADER = ['--enable-source-maps', '--import', new URL('../../src/config/register.ts', import.meta.url).href];
+
 let dir: string;
 
 /**
@@ -45,7 +48,7 @@ function run(name: string, source: string, options: CompilerOptions = {}): unkno
     } catch (error) {
       console.log(JSON.stringify({ stack: error.stack }));
     }`;
-  const output = execFileSync(process.execPath, ['--enable-source-maps', '--input-type=module', '--eval', runner], { encoding: 'utf8' });
+  const output = execFileSync(process.execPath, [...UNDER_THE_LOADER, '--input-type=module', '--eval', runner], { encoding: 'utf8' });
   return JSON.parse(output.trim().split('\n').at(-1)!) as unknown;
 }
 
@@ -125,6 +128,34 @@ describe('compileTypeScript', () => {
     expect(run('helper.cts', source)).toEqual({ value: { ext: '.cts', strict: true, stats: null } });
     const licensed = ['/**', ' * License header.', ' */', '// eslint-disable', "'use strict';", 'module.exports = (function (this: unknown) { return this === undefined; })();'].join('\n');
     expect(run('licensed.cts', licensed)).toEqual({ value: true });
+    const trailing = ["import type { Stats } from 'node:fs';", 'const s: Stats | null = null;', 'export = { s };', '// a trailing comment', '/* and a block */'].join('\n');
+    expect(run('trailing.cts', trailing)).toEqual({ value: { s: null } });
+  });
+
+  it('composes the inline source map an earlier loader left, so a frame names the line on disk', () => {
+    const original = 'interface A {\n  a: number;\n}\ntype B = A;\n\nexport const result = 1;\nthrow new Error("on line 7");\n';
+    const file = path.join(dir, 'chained.ts');
+    writeFileSync(file, original);
+    const earlier = compileTypeScript(file, original, KINDS['.ts']!, {});
+    const compiled = path.join(dir, 'chained.mjs');
+    writeFileSync(compiled, compileTypeScript(file, earlier, KINDS['.ts']!, {}));
+    const output = execFileSync(process.execPath, [...UNDER_THE_LOADER, '--input-type=module', '--eval', `try { await import(${JSON.stringify(pathToFileURL(compiled).href)}); } catch (error) { console.log(error.stack); }`], { encoding: 'utf8' });
+    expect(output).toContain(`${file}:7:7`);
+  });
+
+  it.each([
+    ['an auto-accessor', 'a.ts', {}, 'export class A {\n  accessor w = 5;\n}\n', '2:3: `accessor` class fields (auto-accessors) are not supported'],
+    ['a standard decorator', 'b.ts', {}, 'const d = (t: unknown) => t;\n@d export class B {}\n', '2:1: decorators need `"experimentalDecorators": true` in tsconfig.json'],
+    ['an import declaration in .cts', 'c.cts', {}, "import type { T } from './t';\nimport { u } from './u';\nexport = u;\n", '2:1: a .cts file is CommonJS'],
+    ['an export declaration in .cts', 'd.cts', {}, 'export const v = 1;\n', '1:1: a .cts file is CommonJS'],
+  ])('refuses %s with its line and the fix', (_case, name, options, source, message) => {
+    const file = path.join(dir, name);
+    expect(() => compileTypeScript(file, source, KINDS[path.extname(name)]!, options)).toThrow(`${file}:${message}`);
+  });
+
+  it('runs legacy decorators and type-only .cts imports the checks let through', () => {
+    expect(() => compileTypeScript(path.join(dir, 'ok.ts'), 'const d = (t: unknown) => t;\n@d export class B {}\n', KINDS['.ts']!, { experimentalDecorators: true })).not.toThrow();
+    expect(() => compileTypeScript(path.join(dir, 'ok.cts'), "import type { T } from './t';\nexport = 1 as T;\n", KINDS['.cts']!, {})).not.toThrow();
   });
 
   it.each([

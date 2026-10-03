@@ -1,7 +1,8 @@
 /**
  * What the loader reads about the project besides the modules themselves:
  * the tsconfig.json that governs a file (the nearest one above it, the way
- * `tsc` finds it, with `extends` applied) and which candidate files exist.
+ * `tsc` finds it, with `extends` applied, or the project it references that
+ * includes the file) and which candidate files exist.
  *
  * Both are kept with the module graph that read them, the way the graph's
  * modules are: a fresh graph (a config loaded with `graph: true`, which
@@ -15,7 +16,7 @@
 
 import { statSync } from 'node:fs';
 import path from 'node:path';
-import { createPathsMatcher, getTsconfig, type PathsMatcher, type TsConfigJson } from 'get-tsconfig';
+import { createFilesMatcher, createPathsMatcher, findTsconfig, parseTsconfig, type FileMatcher, type PathsMatcher, type TsConfigJson } from 'get-tsconfig';
 
 export type CompilerOptions = TsConfigJson.CompilerOptions;
 
@@ -25,14 +26,31 @@ export interface ProjectTsconfig {
   readonly paths: PathsMatcher | null;
 }
 
+/** A tsconfig.json read once: its settings, and which files it includes. */
+interface ReadTsconfig {
+  readonly tsconfig: ProjectTsconfig;
+  readonly includes: FileMatcher;
+  /** The tsconfig.json files its `references` name. */
+  readonly references: readonly string[];
+}
+
+/** The tsconfig.json files a warning was printed for, once per process each. */
+const warned = new Set<string>();
+
+/** The tsconfig.json a project reference names: the file, or `tsconfig.json` in the directory. */
+function referencedTsconfig(owner: string, reference: string): string {
+  const target = path.resolve(path.dirname(owner), reference);
+  return target.endsWith('.json') ? target : path.join(target, 'tsconfig.json');
+}
+
 /** The project as one module graph sees it. */
 export class ProjectView {
-  /** The tsconfig of each directory looked up so far; undefined where none applies. */
-  private readonly byDirectory = new Map<string, ProjectTsconfig | undefined>();
-  /** One entry per tsconfig file, shared by every directory under it. */
-  private readonly byFile = new Map<string, ProjectTsconfig>();
+  /** The nearest tsconfig.json of each directory looked up so far; undefined where none is above it. */
+  private readonly nearest = new Map<string, string | undefined>();
+  /** Each tsconfig.json read so far; undefined for one that could not be read. */
+  private readonly read = new Map<string, ReadTsconfig | undefined>();
   /** get-tsconfig's own cache of the files it read. */
-  private readonly reads = new Map<string, unknown>();
+  private readonly reads = new Map<string, string>();
   /** File lookups answered so far, for a graph's view; undefined where the disk is asked each time. */
   private readonly files: Map<string, boolean> | undefined;
 
@@ -40,21 +58,50 @@ export class ProjectView {
     this.files = memoizeFiles ? new Map() : undefined;
   }
 
-  /** The tsconfig that governs `file`, or undefined when no tsconfig.json is above it. */
+  /**
+   * The tsconfig that governs `file`, or undefined when no readable
+   * tsconfig.json is above it. A solution-style tsconfig.json (`files: []`
+   * and `references`, as Vite writes) hands a file to the referenced
+   * tsconfig that includes it, the way TypeScript's editor support does.
+   */
   tsconfigFor(file: string): ProjectTsconfig | undefined {
     const directory = path.dirname(file);
-    if (this.byDirectory.has(directory)) return this.byDirectory.get(directory);
-    const found = getTsconfig(directory, 'tsconfig.json', this.reads);
-    let tsconfig: ProjectTsconfig | undefined;
-    if (found !== null) {
-      tsconfig = this.byFile.get(found.path);
-      if (tsconfig === undefined) {
-        tsconfig = { compilerOptions: found.config.compilerOptions ?? {}, paths: createPathsMatcher(found) };
-        this.byFile.set(found.path, tsconfig);
+    if (!this.nearest.has(directory)) this.nearest.set(directory, findTsconfig(directory, 'tsconfig.json', this.reads));
+    const nearest = this.nearest.get(directory);
+    const root = nearest === undefined ? undefined : this.readTsconfig(nearest);
+    if (root === undefined || root.references.length === 0 || root.includes(file) !== undefined) return root?.tsconfig;
+    for (const reference of root.references) {
+      const referenced = this.readTsconfig(reference);
+      if (referenced !== undefined && referenced.includes(file) !== undefined) return referenced.tsconfig;
+    }
+    return root.tsconfig;
+  }
+
+  /**
+   * `tsconfigPath` read with its `extends` chain, or undefined when it
+   * cannot be, with a warning: an `extends` naming a package that is not
+   * installed (`@tsconfig/node22`) should not stop a run, so TypeScript
+   * compiles with default settings and no `paths` instead.
+   */
+  private readTsconfig(tsconfigPath: string): ReadTsconfig | undefined {
+    if (this.read.has(tsconfigPath)) return this.read.get(tsconfigPath);
+    let read: ReadTsconfig | undefined;
+    try {
+      const result = { path: tsconfigPath, config: parseTsconfig(tsconfigPath, this.reads) };
+      read = {
+        tsconfig: { compilerOptions: result.config.compilerOptions ?? {}, paths: createPathsMatcher(result) },
+        includes: createFilesMatcher(result),
+        references: (result.config.references ?? []).map((reference) => referencedTsconfig(tsconfigPath, reference.path)),
+      };
+    } catch (cause) {
+      if (!warned.has(tsconfigPath)) {
+        warned.add(tsconfigPath);
+        const reason = cause instanceof Error ? cause.message : String(cause);
+        process.emitWarning(`e2e ignores ${tsconfigPath}, which it cannot read (${reason}): TypeScript compiles with default settings and no paths`);
       }
     }
-    this.byDirectory.set(directory, tsconfig);
-    return tsconfig;
+    this.read.set(tsconfigPath, read);
+    return read;
   }
 
   /** Whether `file` is a regular file. */

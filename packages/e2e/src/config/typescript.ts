@@ -8,12 +8,42 @@
  * decorators, class field semantics, and import elision.
  */
 
+import remapping, { type SourceMapInput } from '@jridgewell/remapping';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
-import { transformSync, type JsxOptions, type OxcError, type TransformOptions } from 'oxc-transform';
-import { importedCommonJsRequireRunsHooks } from '../internal/node-version.ts';
-import type { CompiledExtension } from './compiled-files.ts';
+import type * as OxcParser from 'oxc-parser';
+import type { JsxOptions, OxcError, TransformOptions } from 'oxc-transform';
+import type * as OxcTransform from 'oxc-transform';
+import { InfrastructureError } from '../internal/errors.ts';
+import { HOOKED_REQUIRE_KEY, type CompiledExtension } from './compiled-files.ts';
 import type { CompilerOptions } from './tsconfig.ts';
+
+const ownRequire = createRequire(import.meta.url);
+
+/** oxc's transformer and parser, loaded on first use. */
+let compiler: { transform: typeof OxcTransform; parser: typeof OxcParser } | undefined;
+
+/**
+ * oxc, loaded when the first file compiles rather than when e2e loads, so
+ * a command that compiles nothing (`--version`, `--help`) still runs
+ * without oxc's native binding. npm leaves that binding out with
+ * `--omit=optional`, and from a lockfile written on another platform
+ * (npm/cli#4828); the error names it and the way back.
+ */
+function oxc(): { transform: typeof OxcTransform; parser: typeof OxcParser } {
+  if (compiler !== undefined) return compiler;
+  try {
+    compiler = { transform: ownRequire('oxc-transform') as typeof OxcTransform, parser: ownRequire('oxc-parser') as typeof OxcParser };
+  } catch (cause) {
+    const binding = `@oxc-transform/binding-${process.platform}-${process.arch}`;
+    throw new InfrastructureError(
+      'TYPESCRIPT_COMPILER_UNAVAILABLE',
+      `e2e compiles TypeScript with oxc, whose native binding for ${process.platform}-${process.arch} (${binding}*) is not installed. npm skips it with --omit=optional, or when package-lock.json was written on another platform (npm/cli#4828): install again without --omit=optional, or delete package-lock.json and node_modules and run npm install`,
+      { cause },
+    );
+  }
+  return compiler;
+}
 
 /** The first ECMAScript edition that defines class fields rather than assigning them. */
 const DEFINED_FIELDS_SINCE = 2022;
@@ -69,73 +99,104 @@ function transformOptions(options: CompilerOptions): TransformOptions {
   };
 }
 
-/** `file:line:column: message` for one error; oxc counts UTF-8 bytes, an editor counts characters. */
+/** `file:line:column: message` for one oxc-transform error; it counts UTF-8 bytes, an editor counts characters. */
 function describeError(file: string, source: Buffer, error: OxcError): string {
   const start = error.labels[0]?.start;
   if (start === undefined) return `${file}: ${error.message}`;
-  const lines = source.subarray(0, start).toString('utf8').split('\n');
-  return `${file}:${lines.length}:${lines.at(-1)!.length + 1}: ${error.message}`;
+  return `${file}:${position(source.subarray(0, start).toString('utf8'))}: ${error.message}`;
+}
+
+/** `line:column` just past `text`, both counted from 1. */
+function position(text: string): string {
+  const lines = text.split('\n');
+  return `${lines.length}:${lines.at(-1)!.length + 1}`;
 }
 
 /**
- * Oxc keeps a file whose only imports were type-only a module by appending
- * `export {};`, even when told the source is CommonJS, where that statement
- * is a syntax error and TypeScript emits nothing. It is an oxc bug, not yet
- * reported upstream (oxc 0.152.0, `crates/oxc_transformer/src/typescript/
- * annotations.rs`, the `no_modules_remaining && some_modules_deleted`
- * branch); the statement is always the last line oxc prints.
+ * Syntax oxc 0.152 passes through unchanged that Node.js cannot run, found
+ * before compiling so the error names the line and the fix instead of a
+ * bare `SyntaxError` from Node.js with no location. Each check only parses
+ * a file whose text could hold the construct.
  */
-function withoutModuleMarker(code: string): string {
-  return code.replace(/(^|\n)export \{\};\n$/, '$1');
-}
-
-/**
- * A `require` that runs resolve hooks, for compiled CommonJS on a Node.js
- * whose `require` in a CommonJS module an ES module imported does not (see
- * `importedCommonJsRequireRunsHooks`). Without it, `require('./helper')`
- * from such a module misses `helper.ts`, a tsconfig alias, and the helpers
- * compiled code requires from e2e's install.
- */
-const HOOKED_REQUIRE = 'require = require("node:module").createRequire(__filename);';
-
-/** What may come before and between directives: whitespace and comments. */
-const TRIVIA = /(?:\s+|\/\/[^\n]*|\/\*[\s\S]*?\*\/)*/y;
-/** One directive: a string literal statement, `"use strict";`. */
-const DIRECTIVE = /"(?:[^"\\\n]|\\.)*";|'(?:[^'\\\n]|\\.)*';/y;
-
-/** Where the directive prologue of compiled `code` ends, past its last `;`, or undefined when it has none. */
-function prologueEnd(code: string): number | undefined {
-  let at = code.startsWith('#!') ? code.indexOf('\n') + 1 || code.length : 0;
-  let end: number | undefined;
-  for (;;) {
-    TRIVIA.lastIndex = at;
-    TRIVIA.exec(code);
-    DIRECTIVE.lastIndex = TRIVIA.lastIndex;
-    if (DIRECTIVE.exec(code) === null) return end;
-    at = DIRECTIVE.lastIndex;
-    end = at;
+function rejectUnsupportedSyntax(file: string, source: string, kind: CompiledExtension, options: CompilerOptions): void {
+  const legacyDecorators = options.experimentalDecorators === true;
+  const commonJs = kind.format === 'commonjs';
+  const mayHold = (commonJs && /\b(?:import|export)\b/.test(source)) || /\baccessor\b/.test(source) || (!legacyDecorators && source.includes('@'));
+  if (!mayHold) return;
+  const parsed = oxc().parser.parseSync(file, source, { lang: kind.lang, sourceType: kind.format });
+  const problems: { start: number; message: string }[] = [];
+  if (commonJs) {
+    for (const declaration of parsed.module.staticImports) {
+      if (declaration.entries.length === 0 || declaration.entries.some((entry) => !entry.isType)) {
+        problems.push({ start: declaration.start, message: 'a .cts file is CommonJS, and e2e does not turn an import declaration into require(): write `import name = require(...)`, or `import type` for types' });
+      }
+    }
+    for (const declaration of parsed.module.staticExports) {
+      problems.push({ start: declaration.start, message: 'a .cts file is CommonJS, and e2e does not turn an export declaration into module.exports: write `export = ...`' });
+    }
+  }
+  const { Visitor } = oxc().parser;
+  new Visitor({
+    AccessorProperty(node) {
+      problems.push({ start: node.start, message: '`accessor` class fields (auto-accessors) are not supported: oxc, which compiles e2e\'s TypeScript, does not lower them yet; write a getter and setter over a private field' });
+    },
+    Decorator(node) {
+      if (!legacyDecorators) {
+        problems.push({ start: node.start, message: 'decorators need `"experimentalDecorators": true` in tsconfig.json: e2e compiles TypeScript\'s legacy decorators, and Node.js does not run standard decorators yet' });
+      }
+    },
+  }).visit(parsed.program);
+  if (problems.length > 0) {
+    throw new SyntaxError(problems.map(({ start, message }) => `${file}:${position(source.slice(0, start))}: ${message}`).join('\n'));
   }
 }
 
 /**
- * Compiled CommonJS whose `require` runs resolve hooks. The statement
- * follows the last directive on its line, so the prologue stays first and
- * no mapped position moves. With no directive it takes a line of its own at
- * the top (after a hashbang), and the source map gains an unmapped line
- * there.
+ * A `require` that runs resolve hooks, for compiled CommonJS. The `require`
+ * Node.js hands a CommonJS module an ES module imported skips them: before
+ * nodejs/node#62920 (24.18.0, 26.2.0; not in Node.js 22), and on every
+ * version once a `module.register` loader is in the chain too (Yarn PnP,
+ * tsx through NODE_OPTIONS). Without it, `require('./helper')` from such a
+ * module misses `helper.ts`, a tsconfig alias, and the helpers compiled code
+ * requires from e2e's install. The loader puts the function on `globalThis`
+ * when it registers (`esm-hooks.ts`): the `require` such a module starts
+ * with cannot load another ES module, e2e's included.
  */
-function withHookedRequire(code: string, mappings: string): { code: string; mappings: string } {
-  const end = prologueEnd(code);
-  if (end !== undefined) return { code: `${code.slice(0, end)} ${HOOKED_REQUIRE}${code.slice(end)}`, mappings };
-  const line = code.startsWith('#!') ? 1 : 0;
-  const lines = code.split('\n');
+const HOOKED_REQUIRE = `require = globalThis[Symbol.for(${JSON.stringify(HOOKED_REQUIRE_KEY)})](__filename);`;
+
+/**
+ * Compiled CommonJS as Node.js can run it, read from oxc's own parse of
+ * the output:
+ * - Oxc keeps a file whose only imports were type-only a module by printing
+ *   `export {};`, even for CommonJS, where that statement is a syntax error
+ *   and TypeScript emits nothing. It is an oxc bug, not yet reported
+ *   upstream (oxc 0.152.0, `crates/oxc_transformer/src/typescript/
+ *   annotations.rs`, the `no_modules_remaining && some_modules_deleted`
+ *   branch). The statement is blanked out, so nothing after it moves.
+ * - `HOOKED_REQUIRE` follows the last directive on
+ *   its line, so the prologue stays first and no mapped position moves; with
+ *   no directive it takes a line of its own at the top (after a hashbang),
+ *   and the source map gains an unmapped line there.
+ */
+function runnableCommonJs(file: string, code: string, mappings: string): { code: string; mappings: string } {
+  const { program } = oxc().parser.parseSync(file, code, { lang: 'js', sourceType: 'commonjs' });
+  let runnable = code;
+  for (const statement of program.body) {
+    if (statement.type === 'ExportNamedDeclaration' && statement.declaration === null && statement.source === null && statement.specifiers.length === 0) {
+      runnable = `${runnable.slice(0, statement.start)}${' '.repeat(statement.end - statement.start)}${runnable.slice(statement.end)}`;
+    }
+  }
+  const directives = program.body.filter((statement) => statement.type === 'ExpressionStatement' && typeof statement.directive === 'string');
+  const last = directives.at(-1);
+  if (last !== undefined) return { code: `${runnable.slice(0, last.end)} ${HOOKED_REQUIRE}${runnable.slice(last.end)}`, mappings };
+  const line = program.hashbang === null ? 0 : 1;
+  const lines = runnable.split('\n');
   lines.splice(line, 0, HOOKED_REQUIRE);
   const mappedLines = mappings.split(';');
   mappedLines.splice(line, 0, '');
   return { code: lines.join('\n'), mappings: mappedLines.join(';') };
 }
 
-const ownRequire = createRequire(import.meta.url);
 /** Each helper's file in e2e's copy of `@oxc-project/runtime`, resolved once. */
 const helperFiles = new Map<string, string>();
 
@@ -164,12 +225,19 @@ function withOwnHelpers(code: string, helpers: Readonly<Record<string, string>>,
   return rewritten;
 }
 
+/** An inline source map at the end of `source`, as another loader earlier in the chain leaves one. */
+const INLINE_MAP = /\n\/\/# sourceMappingURL=data:application\/json(?:;charset=utf-8)?;base64,([A-Za-z0-9+/=]+)\s*$/;
+
 /**
- * `source`, the content of `file`, compiled to JavaScript for its kind with
- * `compilerOptions`, with an inline source map.
+ * `source`, the content of `file` as the next loader handed it over,
+ * compiled to JavaScript for its kind with `compilerOptions`, with an
+ * inline source map. When an earlier loader already compiled the file and
+ * left its own inline map, the two are composed, so positions still lead to
+ * the file on disk.
  */
 export function compileTypeScript(file: string, source: string, kind: CompiledExtension, compilerOptions: CompilerOptions): string {
-  const result = transformSync(file, source, {
+  rejectUnsupportedSyntax(file, source, kind, compilerOptions);
+  const result = oxc().transform.transformSync(file, source, {
     ...transformOptions(compilerOptions),
     lang: kind.lang,
     sourceType: kind.format,
@@ -183,16 +251,10 @@ export function compileTypeScript(file: string, source: string, kind: CompiledEx
   }
   let code = withOwnHelpers(result.code, result.helpersUsed, kind.format);
   let mappings = result.map?.mappings ?? '';
-  if (kind.format === 'commonjs') {
-    code = withoutModuleMarker(code);
-    if (!importedCommonJsRequireRunsHooks()) ({ code, mappings } = withHookedRequire(code, mappings));
-  }
-  const map = {
-    ...result.map,
-    mappings,
-    // Absolute, so a frame names the file without the loader's query, whatever characters its name holds.
-    sources: [pathToFileURL(file).href],
-    sourcesContent: undefined,
-  };
+  if (kind.format === 'commonjs') ({ code, mappings } = runnableCommonJs(file, code, mappings));
+  // Absolute, so a frame names the file without the loader's query, whatever characters its name holds.
+  const own = { version: 3 as const, mappings, names: result.map?.names ?? [], sources: [pathToFileURL(file).href] };
+  const incoming = INLINE_MAP.exec(source)?.[1];
+  const map = incoming === undefined ? own : remapping([own, JSON.parse(Buffer.from(incoming, 'base64').toString('utf8')) as SourceMapInput], () => null);
   return `${code}\n//# sourceMappingURL=data:application/json;base64,${Buffer.from(JSON.stringify(map)).toString('base64')}\n`;
 }

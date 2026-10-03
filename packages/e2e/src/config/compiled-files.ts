@@ -67,3 +67,6 @@ export function writtenCandidates(extension: string): readonly string[] {
 
 /** Tried, in order, after an extensionless path and after a directory's `index`: what `./x.js` would find, then JSON. */
 export const IMPLIED_EXTENSIONS: readonly string[] = [...writtenCandidates('.js'), '.json'];
+
+/** The `globalThis` symbol key of the `require` compiled CommonJS uses where Node.js's skips resolve hooks. */
+export const HOOKED_REQUIRE_KEY = 'e2e.hooked-require.v1';
