@@ -2,10 +2,13 @@
 
 ## Requirements
 
-- Node.js 22.12 or newer.
+- Node.js 24.8 or newer, or 22.22.3 or newer on Node.js 22.
 - ES modules: `.ts` config, tests, helpers, and workspace packages exporting
   `.ts` source load as ESM regardless of the nearest `package.json` `type`
   (CommonJS packages need no change); never `require` or `module.exports`.
+  Imports follow TypeScript: `./x.js` or `./x` loads `x.ts`, and the nearest
+  `tsconfig.json` `paths` and `baseUrl` apply. Decorators need
+  `experimentalDecorators`; CommonJS TypeScript goes in `.cts`.
 - Browser tests: `@e2e-dev/web`, pinning `playwright-core` exactly; do not
   add `playwright` for it. Missing browsers download on first boot; in CI run
   `npx @e2e-dev/web install chromium --with-deps` (pnpm: `pnpm exec e2e-web
