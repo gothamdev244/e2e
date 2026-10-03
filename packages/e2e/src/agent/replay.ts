@@ -74,7 +74,7 @@ export interface ReplayHost {
    * policy's (`ActionDispatcher.paceNext`). Absent on a host that paces
    * every action by its policy.
    */
-  paceNext?(changeWaitMs: number): void;
+  paceNext?(changeWaitMs: number | undefined): void;
 }
 
 /**
@@ -85,7 +85,12 @@ export interface ReplayHost {
  */
 export const QUIET_CHANGE_WAIT_MS = 300;
 
-/** The grammar with every call paced as quiet: each one asks the host for the short change wait first. */
+/**
+ * The grammar with every call paced as quiet: each one asks the host for the
+ * short change wait first, and clears it once the call settles, so a call
+ * that fails before its action consumes the pace (a refused upload path)
+ * never hands it to the next action, the executor's after a hand-off.
+ */
 function quietActions(host: ReplayHost): ExecutorActions {
   return new Proxy(host.actions, {
     get: (target, key, receiver) => {
@@ -93,7 +98,17 @@ function quietActions(host: ReplayHost): ExecutorActions {
       if (typeof value !== 'function') return value;
       return (...args: unknown[]): unknown => {
         host.paceNext?.(QUIET_CHANGE_WAIT_MS);
-        return (value as (...args: unknown[]) => unknown).apply(target, args);
+        const clear = () => host.paceNext?.(undefined);
+        let result: unknown;
+        try {
+          result = (value as (...args: unknown[]) => unknown).apply(target, args);
+        } catch (cause) {
+          clear();
+          throw cause;
+        }
+        if (result instanceof Promise) return result.finally(clear);
+        clear();
+        return result;
       };
     },
   });

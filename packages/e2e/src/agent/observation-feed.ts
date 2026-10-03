@@ -72,6 +72,15 @@ export interface ObservationFeedOptions {
   readonly maxInputTokens: number;
 }
 
+/**
+ * What arming a change wait measured: `measured` when it is the only wait
+ * pending, so the next settled look answers for this action alone;
+ * `stacked` when an earlier action's wait was still pending, so the look
+ * will answer for both and says nothing about either; `none` when there was
+ * no comparable shape to wait against.
+ */
+export type ArmedChange = 'measured' | 'stacked' | 'none';
+
 export class ObservationFeed {
   private newest: AgentObservation | undefined;
   /** A cache probe may supply the executor's first look, once, before any action. */
@@ -195,10 +204,12 @@ export class ObservationFeed {
    * observation's shape. Captures and time before the next observation count
    * toward the window. Nothing is armed without a comparable shape.
    */
-  armChange(waitMs: number): void {
-    if (this.newest === undefined) return;
-    const shape = changeShape(this.newest);
+  armChange(waitMs: number): ArmedChange {
+    const stacked = this.pendingChange !== undefined;
+    const shape = this.newest === undefined ? undefined : changeShape(this.newest);
     this.pendingChange = shape === undefined ? undefined : { shape, deadlineMs: Date.now() + waitMs };
+    if (shape === undefined) return 'none';
+    return stacked ? 'stacked' : 'measured';
   }
 
   /**
@@ -324,6 +335,7 @@ export class ObservationFeed {
     if (mode === 'raw') return this.capture(pixels);
     const changedFrom = this.pendingChange;
     this.pendingChange = undefined;
+    let left = false;
     const settled = settleObservation(
       () => this.capture(pixels),
       observationShape,
@@ -339,12 +351,14 @@ export class ObservationFeed {
         stableWaitMs: mode === 'held-still' ? HELD_STILL_MS : 0,
         changeShapeOf: changeShape,
         transitional: isTransitionalObservation,
+        onLeft: () => {
+          left = true;
+        },
       },
     );
     if (changedFrom === undefined) return settled;
     return settled.then((observation) => {
-      const shape = changeShape(observation);
-      this.onChangeSettled?.(shape === undefined || shape !== changedFrom.shape);
+      this.onChangeSettled?.(left);
       return observation;
     });
   }

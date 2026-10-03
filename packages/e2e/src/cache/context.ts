@@ -43,7 +43,17 @@ export type StagedTrace = {
   /** Index of the step in the attempt's step timeline. */
   readonly stepIndex: number;
 } & (
-  | { readonly kind: 'write'; readonly trace: ActionTrace }
+  | {
+      readonly kind: 'write';
+      readonly trace: ActionTrace;
+      /**
+       * Set when the step read an entry that did not serve it: its replay
+       * stopped short for a reason other than a gap. The recording replaces
+       * the entry even when it is the same flow, since what made the replay
+       * stop (a stale `quiet` mark, a timing) is not part of the flow.
+       */
+      readonly replaces?: true;
+    }
   | {
       readonly kind: 'keep';
       readonly recordedFor: TraceProvenance;
@@ -205,7 +215,7 @@ export async function flushStagedTraces(context: AgentCacheContext, settlement: 
         await completeEntry(context.store, entry.keyHash, entry.recordedFor, entry.quiet);
         continue;
       }
-      if (await holdsSameFlow(context.store, entry.keyHash, entry.trace)) continue;
+      if (entry.replaces !== true && (await holdsSameFlow(context.store, entry.keyHash, entry.trace))) continue;
       await context.store.write(entry.keyHash, entry.trace);
     } catch {
       // The cache is disposable; a failed flush is a slower next run only.

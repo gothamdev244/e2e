@@ -24,7 +24,7 @@ import { derivedReason } from './derived.ts';
 import { AgentError } from './error.ts';
 import type { ExecutorActions, ExecutorTarget, PointHit, PointTapResult } from './executor.ts';
 import type { AgentContext } from './invocation.ts';
-import type { ObservationFeed, Resolved } from './observation-feed.ts';
+import type { ArmedChange, ObservationFeed, Resolved } from './observation-feed.ts';
 import { resolveScrollTarget } from './scroll-target.ts';
 import type { OperationQueue } from './operation-queue.ts';
 import { instrumentPhase, recordPolicyEvent } from './phases.ts';
@@ -554,7 +554,7 @@ export class ActionDispatcher {
    * not wait out a change the recording proved never comes. Consumed by the
    * next action, whether it commits or not.
    */
-  paceNext(changeWaitMs: number): void {
+  paceNext(changeWaitMs: number | undefined): void {
     this.nextChangeWaitMs = changeWaitMs;
   }
 
@@ -579,11 +579,12 @@ export class ActionDispatcher {
     const trace = this.options.trace();
     if (trace === undefined) return;
     // Told after the action is in the trace, so the settle the next look
-    // reports is noted against the action that armed it.
+    // reports is noted against the action that armed it, and only when no
+    // earlier action's wait was still pending against the same look.
     try {
       this.recordAction(trace, action);
     } finally {
-      if (armed) trace.armedChange();
+      if (armed !== 'none') trace.armedChange(armed === 'measured');
     }
   }
 
@@ -616,12 +617,11 @@ export class ActionDispatcher {
    * would wait against the destination screen. An action whose effect the
    * tree cannot show arms nothing.
    */
-  private armAfter(name: RecordedAction['name'], paced?: number): boolean {
-    if (name === 'scrollUntil' && !this.verbs.has('scrollTo')) return false;
+  private armAfter(name: RecordedAction['name'], paced?: number): ArmedChange {
+    if (name === 'scrollUntil' && !this.verbs.has('scrollTo')) return 'none';
     const { changeWaitMs } = SETTLE_AFTER[name];
-    if (changeWaitMs === undefined) return false;
-    this.feed.armChange(paced === undefined ? changeWaitMs : Math.min(paced, changeWaitMs));
-    return true;
+    if (changeWaitMs === undefined) return 'none';
+    return this.feed.armChange(paced === undefined ? changeWaitMs : Math.min(paced, changeWaitMs));
   }
 
   /**

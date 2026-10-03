@@ -169,6 +169,12 @@ describe('relocateRecorded', () => {
       id: 'a',
       fallback: 'test-id',
     });
+    // A case change on a label that carries a tally is a change to heal too.
+    expect(relocateRecorded(inbox, redactedNodes([node('a', { role: 'link', name: 'INBOX (3 messages)', testId: 'inbox' })]))).toEqual({
+      kind: 'found',
+      id: 'a',
+      fallback: 'test-id',
+    });
     // A case change folds to one shape but carries no tally: a change to heal.
     const save: TraceTargetDescriptor = { role: 'button', name: 'Save', testId: 'save' };
     expect(relocateRecorded(save, redactedNodes([node('a', { role: 'button', name: 'SAVE', testId: 'save' })]))).toEqual({

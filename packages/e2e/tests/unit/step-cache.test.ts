@@ -475,6 +475,25 @@ describe('StepTraceSession', () => {
     await session.conclude('passed', 'the customers page is open');
     expect(context.staged).toHaveLength(1);
     expect(stagedTrace(context).actions.map((action) => action.name)).toEqual(['navigate']);
+    // The entry did not serve the step, so the recording replaces it even as the same flow.
+    expect(context.staged[0]).toMatchObject({ kind: 'write', replaces: true });
+  });
+
+  it('re-stages a step that handed off at a gap as an ordinary recording, which the same flow leaves alone', async () => {
+    const context = entryContext({
+      actions: [
+        { name: 'navigate', summary: 'navigate to "/customers"', url: '/customers' },
+        { name: 'tool', summary: 'tool type (run-time value)', derived: 'whole-node' },
+      ],
+      endPath: '/customers',
+    });
+    const session = recordingSession(context, ['/pricing', '/customers', '/customers', '/customers']);
+    await session.begin();
+    expect(session.replayedPrefix?.stopReason).toBe('gap');
+    session.recordDerivedGap('whole-node');
+    await session.conclude('passed', 'done');
+    expect(context.staged[0]).toMatchObject({ kind: 'write' });
+    expect(context.staged[0]).not.toHaveProperty('replaces');
   });
 
   it('evicts instead of re-staging when the executor had to repair after an end-mismatch', async () => {

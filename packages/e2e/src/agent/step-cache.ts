@@ -216,8 +216,8 @@ export class StepTraceSession {
   }
 
   /** Notes that the action just recorded armed a change wait (`TraceRecorder.armedChange`). */
-  armedChange(): void {
-    this.recorder?.armedChange();
+  armedChange(measured: boolean): void {
+    this.recorder?.armedChange(measured);
   }
 
   /** Notes whether the screen changed within the awaiting action's change wait (`TraceRecorder.noteSettled`). */
@@ -465,7 +465,7 @@ export class StepTraceSession {
       }),
       signal: host.signal,
       remainingMs: () => host.remainingMs(),
-      ...(host.paceNext === undefined ? {} : { paceNext: (changeWaitMs: number) => host.paceNext?.(changeWaitMs) }),
+      ...(host.paceNext === undefined ? {} : { paceNext: (changeWaitMs: number | undefined) => host.paceNext?.(changeWaitMs) }),
     };
     const outcome = await replayTrace(watched, trace, {
       ...(start?.kind === 'semantic' ? { initial: start } : {}),
@@ -636,7 +636,13 @@ export class StepTraceSession {
     }
     const templated = templateTrace(trace, this.options.templates);
     if (templated === undefined) return false;
-    this.cache.staged.push({ kind: 'write', keyHash: this.keyHash, trace: templated, stepIndex: this.options.stepIndex });
+    this.cache.staged.push({
+      kind: 'write',
+      keyHash: this.keyHash,
+      trace: templated,
+      stepIndex: this.options.stepIndex,
+      ...(this.readEntryHit && !this.replayedWhole && this.info?.reason !== 'gap' ? { replaces: true as const } : {}),
+    });
     return true;
   }
 

@@ -139,9 +139,14 @@ tree never shows (a right-click that opens a native menu, a key that moves a
 caret, a tap that only arms the next control) waits the full 2 s every time.
 
 The recording notes how each action settled. `ObservationFeed` reports
-whether a settled look saw the screen change, the dispatcher tells the
-recorder which action armed the wait (`armedChange`), and an action that
-changed nothing is stored `quiet`. A replay arms a 300 ms change wait for a
+whether any capture of a settled look left the shape the action was
+resolved against (a save that showed "Saving..." and came back changed the
+screen), the dispatcher tells the recorder which action armed the wait
+(`armedChange`), and an action that changed nothing is stored `quiet`. A
+note is kept only when it can answer for one action: when another action's
+wait was still pending, or another action landed before the look, nothing
+is marked. The pace is cleared once the call settles, so a call that fails
+before its action runs never hands it to the executor. A replay arms a 300 ms change wait for a
 quiet action instead (`QUIET_CHANGE_WAIT_MS`, `ActionDispatcher.paceNext`),
 so it is paced by what the recording saw rather than by timeouts. The held
 still check after it, relocation polling, and the end-state wait are
@@ -214,7 +219,7 @@ param-collision`).
 | passed | the agent had to act after an `end-mismatch` | evict: the flow is proven not to produce the effect |
 | passed | a whole replay, every control exact | `keep`: the file stays byte for byte |
 | passed | a whole replay that used a fallback | `write`: heal (see above) |
-| passed | a live run or a hand-off | `write` of what was recorded, or evict the read entry when nothing is recordable |
+| passed | a live run or a hand-off | `write` of what was recorded, or evict the read entry when nothing is recordable; after an entry that did not serve the step (anything but a gap), the write replaces it even as the same flow, so a stale `quiet` mark cannot outlive it |
 | failed | a replay ran any action | evict, unless `cache.strict` failed it |
 | no verdict | cancelled, or no model answered | nothing |
 

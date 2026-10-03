@@ -94,11 +94,12 @@ export class TraceRecorder {
 
   /**
    * Notes that the action just recorded armed a change wait, so the settle
-   * the next look reports is about it. An action folded into the one before
-   * it, or dropped at the cap, is noted against nothing.
+   * the next look reports is about it. Not `measured` (another action's wait
+   * was still pending against the same look), folded into the action before
+   * it, or dropped at the cap, it is noted against nothing.
    */
-  armedChange(): void {
-    this.awaitingSettle = this.lastPushed;
+  armedChange(measured: boolean): void {
+    this.awaitingSettle = measured ? this.lastPushed : undefined;
   }
 
   /**
@@ -291,6 +292,9 @@ export class TraceRecorder {
     // to its end fits the trace, and replays with the same repeats.
     const last = this.actions[this.actions.length - 1];
     this.lastPushed = undefined;
+    // Any action after the awaiting one lands before the look that would
+    // answer for it, so that look answers for neither.
+    this.awaitingSettle = undefined;
     if (action.name === 'scroll' && last?.name === 'scroll' && sameScroll(last, action)) {
       // The smallest coverage of the repeats decides the viewport fallback,
       // so a list that shrank on the way is never promoted by its first size.

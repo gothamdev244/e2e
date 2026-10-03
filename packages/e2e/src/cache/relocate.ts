@@ -286,7 +286,10 @@ function labelDriftOnly(recorded: TraceTargetDescriptor, live: TraceTargetDescri
   const label = (field: 'name' | 'text') => {
     const was = recorded[field];
     const now = live[field];
-    return was === now || (was !== undefined && now !== undefined && carriesState(was) && sameLabelShape(was, now));
+    return (
+      was === now ||
+      (was !== undefined && now !== undefined && carriesState(was) && was.toLowerCase() !== now.toLowerCase() && sameLabelShape(was, now))
+    );
   };
   return fieldsIdentical(recorded, live, ['role', 'testId', 'placeholder', 'inputPurpose']) && label('name') && label('text');
 }
