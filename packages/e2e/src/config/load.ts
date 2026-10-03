@@ -130,6 +130,9 @@ export async function loadConfigModule(configPath: string, options: ConfigLoadOp
     if (isForeignE2EError(cause) && cause.category === 'configuration') {
       throw new ConfigurationError(cause.code, cause.message, { cause });
     }
+    if (isForeignE2EError(cause) && cause.category === 'infrastructure') {
+      throw new InfrastructureError(cause.code, cause.message, { cause });
+    }
     throw new ConfigurationError(
       'CONFIG_LOAD_FAILED',
       `failed to load config ${configPath}: ${explainModuleError(cause, configPath)}`,

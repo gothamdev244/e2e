@@ -44,6 +44,12 @@ describe('loadConfigModule', () => {
     });
   });
 
+  it('keeps an infrastructure error from another copy of e2e as that, with its code', async () => {
+    const foreign = "const error = Object.assign(new Error('no browser'), { category: 'infrastructure', code: 'BROWSER_MISSING', retryable: false });\nerror[Symbol.for('e2e.error.v1')] = true;\nthrow error;\nexport default {};\n";
+    writeFileSync(path.join(dir, 'e2e.config.ts'), foreign);
+    await expect(loadConfigModule(path.join(dir, 'e2e.config.ts'))).rejects.toMatchObject({ category: 'infrastructure', code: 'BROWSER_MISSING', message: 'no browser' });
+  });
+
   it('reports any other throw while the config evaluates as CONFIG_LOAD_FAILED', async () => {
     writeFileSync(path.join(dir, 'e2e.config.ts'), `throw new Error('boom');\nexport default {};\n`);
     await expect(loadConfigModule(path.join(dir, 'e2e.config.ts'))).rejects.toMatchObject({ code: 'CONFIG_LOAD_FAILED' });

@@ -3,6 +3,7 @@
 import { fork, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { WARNED_TSCONFIGS_ENV, warnedTsconfigs } from '../../config/tsconfig.ts';
 import { InfrastructureError } from '../../internal/errors.ts';
 import type { SpawnUnitRunner, UnitRunner, UnitRunnerEvents } from '../unit-runner.ts';
 import type {
@@ -61,7 +62,8 @@ class ChildProcessRunner implements UnitRunner {
       cwd: spawn.projectRoot,
       execArgv: entry.execArgv,
       stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
-      env: spawn.env,
+      // Collecting read the project's tsconfig.json files first; the worker warns only about ones it reaches on its own.
+      env: { ...spawn.env, [WARNED_TSCONFIGS_ENV]: warnedTsconfigs() },
     });
     this.child.on('message', (message) => events.onMessage(message as WorkerToMain));
     this.exit = new Promise<void>((resolve) => {

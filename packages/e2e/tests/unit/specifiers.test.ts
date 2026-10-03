@@ -15,6 +15,7 @@ describe('pathTarget', () => {
   it('reads an import on Windows as a URL', () => {
     expect(pathTarget('./x%20y.ts?v=1', 'C:\\app\\lib\\a.ts', false, path.win32)).toEqual({ file: 'C:\\app\\lib\\x y.ts', suffix: '?v=1' });
     expect(pathTarget('file:///C:/app/lib/b.ts', 'C:\\app\\lib\\a.ts', false, path.win32)).toEqual({ file: 'C:\\app\\lib\\b.ts', suffix: '' });
+    expect(pathTarget('FILE:///C:/app/lib/b.ts', 'C:\\app\\lib\\a.ts', false, path.win32)).toEqual({ file: 'C:\\app\\lib\\b.ts', suffix: '' });
   });
 
   it.each([

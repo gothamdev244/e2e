@@ -255,6 +255,22 @@ describe('the TypeScript loader', () => {
     expect(stderr).toContain('@tsconfig/node22/tsconfig.json');
   });
 
+  it('warns about an unreadable tsconfig.json only a worker reaches', async () => {
+    createProject({ type: 'module' });
+    write({
+      'nested/tsconfig.json': JSON.stringify({ extends: '@tsconfig/missing/tsconfig.json' }),
+      'nested/mod.ts': 'export const value: number = 1;\n',
+      'tests/late.e2e.ts': "import { expect, test } from 'e2e';\n\ntest('imports late', async () => {\n  const { value } = await import('../nested/mod.ts');\n  expect(value).toBe(1);\n});\n",
+    });
+    const { code, stdout, stderr } = await runCli(['tests/late.e2e.ts']);
+    expect(stdout).toContain('1 passed');
+    expect(code).toBe(0);
+    // Reached inside a test, so the reporter shows it under that test's output.
+    const output = `${stdout}${stderr}`;
+    expect(output.split('e2e ignores').length - 1).toBe(1);
+    expect(output).toContain(`e2e ignores ${path.join(realpathSync(dir), 'nested', 'tsconfig.json')}`);
+  });
+
   it('runs --version without oxc, and fails a run with TYPESCRIPT_COMPILER_UNAVAILABLE naming the binding', async () => {
     createProject({ type: 'module' });
     const hook = "import { registerHooks } from 'node:module';\nregisterHooks({ resolve(specifier, context, nextResolve) {\n  if (specifier === 'oxc-transform') throw new Error('Cannot find native binding. npm has a bug related to optional dependencies');\n  return nextResolve(specifier, context);\n} });\n";

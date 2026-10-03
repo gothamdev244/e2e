@@ -138,6 +138,7 @@ describe('resolve', () => {
     const exports = { '#js/sub': url('internal/sub.js'), '#bare': url('internal/sub'), '#dir': url('lib/dir') };
     expect(resolveFrom(url('tests/example.e2e.ts'), '#js/sub', { exports }).asked).toEqual(['#js/sub', url('internal/sub.ts')]);
     expect(resolveFrom(url('tests/example.e2e.ts'), '#bare', { exports }).asked).toEqual(['#bare', url('internal/sub.ts')]);
+    expect(resolveFrom(url('tests/example.e2e.ts'), '#dir', { exports }).asked).toEqual(['#dir', url('lib/dir/index.ts')]);
     expect(resolveFrom(url('tests/example.e2e.ts'), '@ws/lib/sub', { exports: { '@ws/lib/sub': url('internal/sub') } }).asked).toEqual([
       '@ws/lib/sub',
       url('internal/sub.ts'),

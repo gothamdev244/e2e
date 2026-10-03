@@ -34,14 +34,15 @@ interface ReadTsconfig {
   readonly references: readonly string[];
 }
 
-/** The tsconfig.json files a warning was printed for, once per process each. */
-const warned = new Set<string>();
-/** Whether this process prints those warnings; a worker leaves them to the runner, which reads the same files first. */
-let warns = true;
+/** Carries the tsconfig.json files the runner warned about to its workers, so each file is reported once per run. */
+export const WARNED_TSCONFIGS_ENV = 'E2E_WARNED_TSCONFIGS';
 
-/** Stops this process warning about unreadable tsconfig.json files: a worker's runner already did. */
-export function leaveTsconfigWarningsToRunner(): void {
-  warns = false;
+/** The tsconfig.json files a warning was printed for: in this process, or in the runner that spawned it. */
+const warned = new Set((process.env[WARNED_TSCONFIGS_ENV] ?? '').split(path.delimiter).filter((file) => file !== ''));
+
+/** The tsconfig.json files warned about so far, as the value of `WARNED_TSCONFIGS_ENV` for a worker. */
+export function warnedTsconfigs(): string {
+  return [...warned].join(path.delimiter);
 }
 
 /** The tsconfig.json a project reference names: the file, or `tsconfig.json` in the directory. */
@@ -101,7 +102,7 @@ export class ProjectView {
         references: (result.config.references ?? []).map((reference) => referencedTsconfig(tsconfigPath, reference.path)),
       };
     } catch (cause) {
-      if (warns && !warned.has(tsconfigPath)) {
+      if (!warned.has(tsconfigPath)) {
         warned.add(tsconfigPath);
         const reason = cause instanceof Error ? cause.message : String(cause);
         process.emitWarning(`e2e ignores ${tsconfigPath}, which it cannot read (${reason}): TypeScript compiles with default settings and no paths`);

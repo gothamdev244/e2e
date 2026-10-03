@@ -9,7 +9,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 /** A relative or absolute URL an `import` writes. */
-const IMPORT_PATH = /^(?:\.{1,2}\/|\/|file:)/;
+const IMPORT_PATH = /^(?:\.{1,2}\/|\/|file:)/i;
 
 /** A file a specifier names, with the query and hash an import URL carried. */
 export interface Target {

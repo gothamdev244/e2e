@@ -128,7 +128,7 @@ describe('compileTypeScript', () => {
     expect(run('helper.cts', source)).toEqual({ value: { ext: '.cts', strict: true, stats: null } });
     const licensed = ['/**', ' * License header.', ' */', '// eslint-disable', "'use strict';", 'module.exports = (function (this: unknown) { return this === undefined; })();'].join('\n');
     expect(run('licensed.cts', licensed)).toEqual({ value: true });
-    const trailing = ["import type { Stats } from 'node:fs';", 'const s: Stats | null = null;', 'export = { s };', '// a trailing comment', '/* and a block */'].join('\n');
+    const trailing = ["import type { Stats } from 'node:fs';", 'const s: Stats | null = null; // żółć 😀', 'export = { s };', '// a trailing comment', '/* and a block */'].join('\n');
     expect(run('trailing.cts', trailing)).toEqual({ value: { s: null } });
   });
 
