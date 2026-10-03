@@ -69,8 +69,10 @@ export function unsupportedRuntimeMessage(
 ): string | undefined {
   // Deno implements module.registerHooks, but not the require() of a native addon from inside a hook that oxc needs.
   if (versions.deno !== undefined) return `e2e runs on Node.js, not Deno ${versions.deno}: run the CLI with Node.js (npx e2e).`;
-  const node = unsupportedNodeMessage(versions.node);
-  if (node !== undefined || hasRegisterHooks) return node;
-  const runtime = versions.bun !== undefined ? `Bun ${versions.bun}` : 'This runtime';
-  return `e2e runs on Node.js: ${runtime} reports Node.js ${versions.node} but has no module.registerHooks, which e2e's TypeScript loader needs. Run the CLI with Node.js: npx e2e, or bunx e2e (without --bun).`;
+  // Checked before the Node.js version a runtime reports, which upgrading Node.js does not change.
+  if (!hasRegisterHooks) {
+    const runtime = versions.bun !== undefined ? `Bun ${versions.bun}` : 'This runtime';
+    return `e2e runs on Node.js: ${runtime} reports Node.js ${versions.node} but has no module.registerHooks, which e2e's TypeScript loader needs. Run the CLI with Node.js: npx e2e, or bunx e2e (without --bun).`;
+  }
+  return unsupportedNodeMessage(versions.node);
 }

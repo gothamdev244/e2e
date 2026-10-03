@@ -86,9 +86,9 @@ a missing `./x.js` or `./x` loads `x.ts` when imported (a `require()` of it
 fails as Node.js reports it). An import written in a JavaScript file resolves
 as Node.js resolves it.
 
-The `tsconfig.json` is the nearest one above the file, or, when that one only
-lists `references` (as Vite writes it), the referenced one that includes the
-file. e2e reads its `paths`, `baseUrl`, `jsx`, `jsxFactory`,
+The `tsconfig.json` is the nearest one above the file, or, when that one has
+`references` and does not include the file itself (as Vite writes it), the
+directly referenced one that does. e2e reads its `paths`, `baseUrl`, `jsx`, `jsxFactory`,
 `jsxFragmentFactory`, `jsxImportSource`, `experimentalDecorators`,
 `emitDecoratorMetadata`, `useDefineForClassFields` (and `target`, which sets
 its default), and `verbatimModuleSyntax`, once per process and again for each

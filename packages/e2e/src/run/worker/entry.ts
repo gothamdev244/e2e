@@ -10,6 +10,7 @@ import { collectModule } from '../../collect/registry.ts';
 import type { TestTargetPair } from '../../collect/select.ts';
 import { importModule, loadConfigModule } from '../../config/load.ts';
 import { assignPorts, resolveConfig } from '../../config/resolve.ts';
+import { leaveTsconfigWarningsToRunner } from '../../config/tsconfig.ts';
 import { setSecretRegistry } from '../../secrets.ts';
 import { loadAiSdk } from '../../agent/ai-sdk.ts';
 import { AiTraceRecorder, registerAiTraceRecorder } from '../../internal/ai-trace.ts';
@@ -203,6 +204,7 @@ function main(): void {
     process.stderr.write('e2e worker requires an IPC channel\n');
     process.exit(1);
   }
+  leaveTsconfigWarningsToRunner();
   // Interrupts arrive over IPC; terminal signals target the runner process.
   process.on('SIGINT', () => undefined);
   process.on('SIGTERM', () => undefined);

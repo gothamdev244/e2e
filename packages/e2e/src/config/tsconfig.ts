@@ -36,6 +36,13 @@ interface ReadTsconfig {
 
 /** The tsconfig.json files a warning was printed for, once per process each. */
 const warned = new Set<string>();
+/** Whether this process prints those warnings; a worker leaves them to the runner, which reads the same files first. */
+let warns = true;
+
+/** Stops this process warning about unreadable tsconfig.json files: a worker's runner already did. */
+export function leaveTsconfigWarningsToRunner(): void {
+  warns = false;
+}
 
 /** The tsconfig.json a project reference names: the file, or `tsconfig.json` in the directory. */
 function referencedTsconfig(owner: string, reference: string): string {
@@ -94,7 +101,7 @@ export class ProjectView {
         references: (result.config.references ?? []).map((reference) => referencedTsconfig(tsconfigPath, reference.path)),
       };
     } catch (cause) {
-      if (!warned.has(tsconfigPath)) {
+      if (warns && !warned.has(tsconfigPath)) {
         warned.add(tsconfigPath);
         const reason = cause instanceof Error ? cause.message : String(cause);
         process.emitWarning(`e2e ignores ${tsconfigPath}, which it cannot read (${reason}): TypeScript compiles with default settings and no paths`);

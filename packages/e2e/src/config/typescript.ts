@@ -38,8 +38,9 @@ function oxc(): { transform: typeof OxcTransform; parser: typeof OxcParser } {
     const reason = (cause instanceof Error ? cause.message : String(cause)).split('\n')[0];
     // napi-rs's loader says so when no platform package is installed.
     const missingBinding = /Cannot find native binding/.test(String((cause as Error | undefined)?.message));
+    const platform = `${process.platform}-${process.arch}`;
     const fix = missingBinding
-      ? `its native binding for ${process.platform}-${process.arch} (@oxc-transform/binding-${process.platform}-${process.arch}*) is not installed. npm skips it with --omit=optional, or when package-lock.json was written on another platform (npm/cli#4828): install again without --omit=optional, or delete package-lock.json and node_modules and run npm install`
+      ? `its native bindings for ${platform} (@oxc-transform/binding-${platform}* and @oxc-parser/binding-${platform}*) are not installed. npm skips it with --omit=optional, or when package-lock.json was written on another platform (npm/cli#4828): install again without --omit=optional, or delete package-lock.json and node_modules and run npm install`
       : `it could not be loaded (${reason})`;
     throw new InfrastructureError('TYPESCRIPT_COMPILER_UNAVAILABLE', `e2e compiles TypeScript with oxc, and ${fix}`, { cause });
   }
@@ -135,6 +136,8 @@ function rejectUnsupportedSyntax(file: string, source: string, kind: CompiledExt
       }
     }
     for (const declaration of parsed.module.staticExports) {
+      // `export interface`, `export type`, and `export declare` emit nothing, as tsc allows in .cts.
+      if (declaration.entries.every((entry) => entry.isType)) continue;
       problems.push({ start: declaration.start, message: 'a .cts file is CommonJS, and e2e does not turn an export declaration into module.exports: write `export = ...`' });
     }
   }

@@ -156,6 +156,8 @@ describe('compileTypeScript', () => {
   it('runs legacy decorators and type-only .cts imports the checks let through', () => {
     expect(() => compileTypeScript(path.join(dir, 'ok.ts'), 'const d = (t: unknown) => t;\n@d export class B {}\n', KINDS['.ts']!, { experimentalDecorators: true })).not.toThrow();
     expect(() => compileTypeScript(path.join(dir, 'ok.cts'), "import type { T } from './t';\nexport = 1 as T;\n", KINDS['.cts']!, {})).not.toThrow();
+    const typeExports = "export interface I { a: number }\nexport type T = I;\nexport type { T as U } from './t';\nexport declare const d: number;\nmodule.exports = 1;\n";
+    expect(() => compileTypeScript(path.join(dir, 'types.cts'), typeExports, KINDS['.cts']!, {})).not.toThrow();
   });
 
   it.each([

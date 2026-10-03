@@ -246,11 +246,27 @@ describe('the TypeScript loader', () => {
       'tsconfig.json': JSON.stringify({ extends: '@tsconfig/node22/tsconfig.json' }),
       'tests/plain.e2e.ts': "import { expect, test } from 'e2e';\n\ntest('runs', () => {\n  expect(1 as number).toBe(1);\n});\n",
     });
-    const { code, stdout, stderr } = await runCli(['tests/plain.e2e.ts']);
-    expect(stdout).toContain('1 passed');
+    write({ 'tests/other.e2e.ts': "import { test } from 'e2e';\n\ntest('also runs', () => {});\n" });
+    const { code, stdout, stderr } = await runCli(['tests/plain.e2e.ts', 'tests/other.e2e.ts', '--workers', '2']);
+    expect(stdout).toContain('2 passed');
     expect(code).toBe(0);
+    expect(stderr.split('e2e ignores').length - 1).toBe(1);
     expect(stderr).toContain(`e2e ignores ${path.join(realpathSync(dir), 'tsconfig.json')}, which it cannot read`);
     expect(stderr).toContain('@tsconfig/node22/tsconfig.json');
+  });
+
+  it('runs --version without oxc, and fails a run with TYPESCRIPT_COMPILER_UNAVAILABLE naming the binding', async () => {
+    createProject({ type: 'module' });
+    const hook = "import { registerHooks } from 'node:module';\nregisterHooks({ resolve(specifier, context, nextResolve) {\n  if (specifier === 'oxc-transform') throw new Error('Cannot find native binding. npm has a bug related to optional dependencies');\n  return nextResolve(specifier, context);\n} });\n";
+    write({ 'no-oxc.mjs': hook });
+    const env = { NODE_OPTIONS: `--import ${pathToFileURL(path.join(dir, 'no-oxc.mjs')).href}` };
+    const version = await execFileAsync(process.execPath, [CLI, '--version'], { cwd: dir, env: { ...process.env, ...env } });
+    expect(version.stdout.trim()).toMatch(/^\d+\.\d+\.\d+/);
+    const { code, stdout } = await runCli(['tests/features.e2e.ts'], env);
+    expect(code).toBe(3);
+    const output = stdout.replaceAll('\n', ' ');
+    expect(output).toContain('TYPESCRIPT_COMPILER_UNAVAILABLE');
+    expect(output).toContain(`@oxc-transform/binding-${process.platform}-${process.arch}`);
   });
 
   it.each([
