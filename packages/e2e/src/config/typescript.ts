@@ -122,7 +122,9 @@ function position(text: string): string {
 function rejectUnsupportedSyntax(file: string, source: string, kind: CompiledExtension, options: CompilerOptions): void {
   const legacyDecorators = options.experimentalDecorators === true;
   const commonJs = kind.format === 'commonjs';
-  const mayHold = (commonJs && /\b(?:import|export)\b/.test(source)) || /\baccessor\b/.test(source) || (!legacyDecorators && source.includes('@'));
+  // A decorator's `@` starts a line or follows whitespace or punctuation, which rules out a package import ('@scope/pkg').
+  const mayHold =
+    (commonJs && /\b(?:import|export)\b/.test(source)) || /\baccessor\b/.test(source) || (!legacyDecorators && /(?:^|[\s(,;{}])@[A-Za-z_$]/m.test(source));
   if (!mayHold) return;
   const parsed = oxc().parser.parseSync(file, source, { lang: kind.lang, sourceType: kind.format });
   const problems: { start: number; message: string }[] = [];
