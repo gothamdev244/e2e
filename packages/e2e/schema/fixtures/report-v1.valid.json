@@ -471,11 +471,10 @@
                     "ledgerBytes": 0
                   },
                   "cache": {
-                    "mode": "missed",
-                    "reason": "gap",
-                    "derived": "minted-token",
-                    "replayedActions": 0,
-                    "totalActions": 2
+                    "mode": "self-finalized",
+                    "replayedActions": 2,
+                    "totalActions": 2,
+                    "relocated": 1
                   },
                   "artifacts": [],
                   "turns": [

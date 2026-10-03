@@ -515,6 +515,25 @@ describe('StepTraceSession', () => {
     }
   });
 
+  it('evicts an entry whose replay a step timeout cut off mid-flight', async () => {
+    const deleted: string[] = [];
+    const context = entryContext({ endPath: '/customers', endAnchors: [savedAnchor] });
+    context.store.delete = async (keyHash) => {
+      deleted.push(keyHash);
+    };
+    const session = makeSession(context, {
+      ...makeHost(['/pricing', '/pricing']),
+      actions: {
+        navigate: async () => {
+          throw new AgentError('STEP_TIMEOUT', 'the step ran out of time');
+        },
+      } as unknown as ExecutorActions,
+    });
+    await expect(session.begin()).rejects.toMatchObject({ code: 'STEP_TIMEOUT' });
+    await session.conclude('failed', undefined);
+    expect(deleted).toEqual(['a'.repeat(64)]);
+  });
+
   it('evicts nothing on failure when no replay was consumed', async () => {
     const deleted: string[] = [];
     const context = fakeContext(async () => ({ status: 'miss' }));
@@ -784,6 +803,82 @@ describe('StepTraceSession', () => {
     // is evicted. The passing screen is never captured for it.
     expect(context.staged).toEqual([{ kind: 'keep', keyHash: 'a'.repeat(64), stepIndex: 1, recordedFor: exampleStep }]);
     expect(captures).toBe(2);
+  });
+
+  it('re-records an entry whose replay found a control only by a fallback, with the control as it reads today', async () => {
+    const relabeled: SemanticNode = { ref: { id: 'u', revision: 'r1' }, role: 'button', name: 'Upgrade now', testId: 'upgrade' };
+    const context = entryContext({
+      actions: [{ name: 'tap', summary: 'tap button "Upgrade"', target: { role: 'button', name: 'Upgrade', testId: 'upgrade' } }],
+      summary: 'upgraded the plan',
+      startPath: '/pricing',
+      endPath: '/pricing',
+      endAnchors: [savedAnchor],
+    });
+    let session: StepTraceSession | undefined;
+    const host = makeHost(['/pricing', '/pricing', '/pricing', '/pricing', '/pricing'], [[relabeled], [relabeled], [relabeled, savedMarker]]);
+    session = makeSession(context, {
+      ...host,
+      remainingMs: () => 60_000,
+      actions: { tap: async (target: { id: string }) => session?.record({ name: 'tap', node: redacted({ ...relabeled, ref: { id: target.id, revision: 'r1' } }) }) } as unknown as ExecutorActions,
+    });
+    const verdict = await session.begin();
+    expect(verdict?.status).toBe('passed');
+    expect(session.cacheInfo).toEqual({ mode: 'self-finalized', replayedActions: 1, totalActions: 1, relocated: 1 });
+    await session.conclude('passed', verdict?.summary);
+    const healed = stagedTrace(context);
+    expect(healed.actions).toEqual([
+      { name: 'tap', summary: 'tap button "Upgrade now"', target: { role: 'button', name: 'Upgrade now', testId: 'upgrade' } },
+    ]);
+    expect(healed.summary).toBe('upgraded the plan');
+    expect(healed.endAnchors).toEqual([savedAnchor]);
+  });
+
+  it('keeps an entry whose replay drifted only in a tally in a label, which moves again every run', async () => {
+    const liked: SemanticNode = { ref: { id: 'l', revision: 'r1' }, role: 'button', name: 'Like (3 likes)' };
+    const context = entryContext({
+      actions: [{ name: 'tap', summary: 'tap button "Like (0 likes)"', target: { role: 'button', name: 'Like (0 likes)' } }],
+      startPath: '/post',
+      endPath: '/post',
+      endAnchors: [savedAnchor],
+    });
+    let session: StepTraceSession | undefined;
+    const host = makeHost(['/post', '/post', '/post', '/post', '/post'], [[liked], [liked], [liked, savedMarker]]);
+    session = makeSession(context, {
+      ...host,
+      remainingMs: () => 60_000,
+      actions: { tap: async () => session?.record({ name: 'tap', node: redacted(liked) }) } as unknown as ExecutorActions,
+    });
+    const verdict = await session.begin();
+    expect(session.cacheInfo).toEqual({ mode: 'self-finalized', replayedActions: 1, totalActions: 1, relocated: 1 });
+    await session.conclude('passed', verdict?.summary);
+    expect(context.staged).toEqual([{ kind: 'keep', keyHash: 'a'.repeat(64), stepIndex: 1, recordedFor: exampleStep }]);
+  });
+
+  it('keeps a drifted entry when the passing screen cannot be captured to re-record it', async () => {
+    const relabeled: SemanticNode = { ref: { id: 'u', revision: 'r1' }, role: 'button', name: 'Upgrade now', testId: 'upgrade' };
+    const context = entryContext({
+      actions: [{ name: 'tap', summary: 'tap button "Upgrade"', target: { role: 'button', name: 'Upgrade', testId: 'upgrade' } }],
+      startPath: '/pricing',
+      endPath: '/pricing',
+      endAnchors: [savedAnchor],
+    });
+    let session: StepTraceSession | undefined;
+    const host = makeHost(['/pricing', '/pricing', '/pricing'], [[relabeled], [relabeled], [relabeled, savedMarker]]);
+    let looks = 0;
+    session = makeSession(context, {
+      ...host,
+      remainingMs: () => 60_000,
+      observe: async (mode) => {
+        looks += 1;
+        if (looks > 3) throw new Error('surface lost');
+        return host.observe(mode);
+      },
+      actions: { tap: async () => session?.record({ name: 'tap', node: redacted(relabeled) }) } as unknown as ExecutorActions,
+    });
+    const verdict = await session.begin();
+    expect(verdict?.status).toBe('passed');
+    await session.conclude('passed', verdict?.summary);
+    expect(context.staged).toEqual([{ kind: 'keep', keyHash: 'a'.repeat(64), stepIndex: 1, recordedFor: exampleStep }]);
   });
 
   it('reads the start capture for the first relocation instead of capturing the same screen again', async () => {

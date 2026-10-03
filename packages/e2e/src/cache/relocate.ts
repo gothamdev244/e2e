@@ -7,6 +7,13 @@
  * replace it behind the same seam; the fail-closed contract (one match or
  * hand off) is not tunable.
  *
+ * A replay walks a ladder (`relocateRecorded`): the exact match first, then
+ * fallbacks that each keep the most stable evidence the recording has left,
+ * the test id before the accessible name. Every rung is still exactly one
+ * match, a recorded container still holds, and two kinds of evidence that
+ * point at different nodes hand off. `README.md` beside this file has the
+ * whole design.
+ *
  * Candidates are compared through the same `describeTarget` projection the
  * recorder used, so redaction, whitespace collapsing, and bounding cannot
  * make a node unequal to its own recording. The matching vocabulary — which
@@ -17,6 +24,7 @@
 
 import type { RedactedNode } from '../agent/observation.ts';
 import { containerKey, describeTarget, parentsOf } from '../agent/actions.ts';
+import { sameLabelShape } from './label-shape.ts';
 import type { TracePosition, TraceTargetDescriptor } from './trace.ts';
 
 /**
@@ -37,11 +45,44 @@ export const MAIN_LIST_SHARE = 0.5;
 
 export type RelocationFailure = 'target-not-found' | 'target-ambiguous';
 
+/**
+ * Which fallback rung re-found a recorded target when the exact match found
+ * nothing (`relocateRecorded`): `test-id`, its test id while its label,
+ * text, or role changed; `accessible`, its role and accessible name while
+ * its test id, placeholder, or text changed; `role-family`, its accessible
+ * name on a control of the same kind under another role (a link that became
+ * a button); `label-shape`, its role and the shape of its label once a tally
+ * or a time in it moved (`Like (0 likes)` to `Like (1 like)`).
+ */
+export type RelocationFallback = 'test-id' | 'accessible' | 'role-family' | 'label-shape';
+
 export type RelocationResult =
-  | { readonly kind: 'found'; readonly id: string }
+  | {
+      readonly kind: 'found';
+      readonly id: string;
+      /** Set when only a fallback rung found the node: the recording drifted from the app. */
+      readonly fallback?: RelocationFallback;
+      /**
+       * Set with `fallback` when the only drift is a tally or a time in the
+       * label (`sameLabelShape`), which moves again on the next run: the
+       * recording is no staler than it will ever be, so nothing re-records it.
+       */
+      readonly transient?: true;
+    }
   | { readonly kind: 'failed'; readonly failure: 'target-not-found' }
   /** Several nodes share the matched identity; a caller with other evidence (a recorded point) may still tell them apart. */
-  | { readonly kind: 'failed'; readonly failure: 'target-ambiguous'; readonly candidates: readonly string[] };
+  | {
+      readonly kind: 'failed';
+      readonly failure: 'target-ambiguous';
+      readonly candidates: readonly string[];
+      /**
+       * Set when the candidates are not look-alikes but the picks of two
+       * kinds of evidence that disagree (a test id on one control, the
+       * recorded name on another). Nothing recorded tells them apart, a point
+       * included, though a screen still settling may.
+       */
+      readonly conflict?: true;
+    };
 
 export type DescriptorField = keyof TraceTargetDescriptor;
 
@@ -168,22 +209,173 @@ function describeNodes(nodes: ReadonlyMap<string, RedactedNode>): readonly Descr
  * The one exception is a recorded `position`: the recording itself found the
  * same twins and noted which one it acted on, so the same count of twins
  * resolves to the same one; any other count diverges as before.
+ *
+ * This is the exact match, what a live step uses to re-find a node it saw a
+ * moment ago. A replay of a recording made on another day walks the
+ * fallbacks too (`relocateRecorded`).
  */
 export function relocateDescriptor(
   descriptor: TraceTargetDescriptor,
   nodes: ReadonlyMap<string, RedactedNode>,
 ): RelocationResult {
-  const matches = matchingIds(descriptor, nodes);
+  const keyed = withinContainer(descriptor, nodes);
+  const result = pick(descriptor, matchingIds(descriptor, keyed));
+  if (result.kind !== 'found' || descriptor.testId === undefined) return result;
+  // The semantic tier forgives a test id the app re-minted, not one that
+  // moved: when another node still carries the recorded test id, the two
+  // kinds of evidence disagree and neither is a safe guess.
+  const holders = keyed.filter((candidate) => candidate.descriptor.testId === descriptor.testId);
+  if (holders.length === 0 || holders.some((holder) => holder.id === result.id)) return result;
+  const candidates = keyed.filter((candidate) => candidate.id === result.id || holders.includes(candidate)).map((candidate) => candidate.id);
+  return { kind: 'failed', failure: 'target-ambiguous', candidates, conflict: true };
+}
+
+/**
+ * Relocates a recorded target, falling back rung by rung when the exact
+ * match (`relocateDescriptor`) finds nothing. Each rung keeps less of the
+ * recording, most stable evidence first: the test id with the role, the test
+ * id alone, the role and accessible name, then the name on a control of the
+ * same kind (`fallbackRungs`). The first rung that settles on one node, or
+ * on the recorded place among the same count of twins, wins.
+ *
+ * What never loosens: a recorded container (`within`) must hold on every
+ * rung, an exact match that is ambiguous diverges rather than falling back,
+ * since every rung only widens it, and an anonymous control has no fallback.
+ * When the test id names one node and the accessible name another, the
+ * recording is evidence for both and the replay hands off.
+ */
+export function relocateRecorded(
+  descriptor: TraceTargetDescriptor,
+  nodes: ReadonlyMap<string, RedactedNode>,
+): RelocationResult {
+  const exact = relocateDescriptor(descriptor, nodes);
+  if (exact.kind === 'found' || exact.failure === 'target-ambiguous') return exact;
+  const candidates = withinContainer(descriptor, nodes);
+  const picks = new Map<RungEvidence, string>();
+  let winner: { readonly id: string; readonly fallback: RelocationFallback } | undefined;
+  for (const rung of fallbackRungs(descriptor)) {
+    if (picks.has(rung.evidence)) continue;
+    const result = pick(descriptor, candidates.filter((candidate) => rung.matches(candidate.descriptor)).map((candidate) => candidate.id));
+    if (result.kind !== 'found') continue;
+    picks.set(rung.evidence, result.id);
+    winner ??= { id: result.id, fallback: rung.fallback };
+  }
+  if (winner === undefined) return { kind: 'failed', failure: 'target-not-found' };
+  // Every node still carrying the recorded test id, however many: a pick
+  // made without the test id must be one of them when there are any.
+  const holders = descriptor.testId === undefined ? [] : candidates.filter((candidate) => candidate.descriptor.testId === descriptor.testId);
+  const disagreeing = [...new Set(picks.values())];
+  if (holders.length > 0 && !holders.some((holder) => holder.id === winner.id)) {
+    disagreeing.push(...holders.map((holder) => holder.id).filter((id) => !disagreeing.includes(id)));
+  }
+  if (disagreeing.length > 1) {
+    const inOrder = candidates.filter((candidate) => disagreeing.includes(candidate.id)).map((candidate) => candidate.id);
+    return { kind: 'failed', failure: 'target-ambiguous', candidates: inOrder, conflict: true };
+  }
+  const live = candidates.find((candidate) => candidate.id === winner.id)!.descriptor;
+  return { kind: 'found', id: winner.id, fallback: winner.fallback, ...(labelDriftOnly(descriptor, live) ? { transient: true as const } : {}) };
+}
+
+/**
+ * Whether a recorded target and the live node differ only in a tally or a
+ * time in their label: every other identity field equal, and the name and
+ * the text each equal or of one shape (`sameLabelShape`).
+ */
+function labelDriftOnly(recorded: TraceTargetDescriptor, live: TraceTargetDescriptor): boolean {
+  const label = (field: 'name' | 'text') => {
+    const was = recorded[field];
+    const now = live[field];
+    return was === now || (was !== undefined && now !== undefined && sameLabelShape(was, now));
+  };
+  return fieldsIdentical(recorded, live, ['role', 'testId', 'placeholder', 'inputPurpose']) && label('name') && label('text');
+}
+
+/**
+ * The one node among `matches` a descriptor names: a lone match for a
+ * descriptor recorded alone, else the recorded place among the same count of
+ * twins. One recorded among twins has only its count and place: one survivor
+ * where the recording counted two is as likely the other twin as the right
+ * one, and among label twins it is whichever one still reads as recorded,
+ * which after the step acted on the recorded one is exactly the wrong one.
+ */
+function pick(descriptor: TraceTargetDescriptor, matches: readonly string[]): RelocationResult {
   if (matches.length === 0) return { kind: 'failed', failure: 'target-not-found' };
   const { position } = descriptor;
-  // A lone match is the node for a descriptor with an identity. An anonymous
-  // one has only its count and place: one unnamed twin where the recording
-  // counted two is as likely the other field as the right one.
-  if (matches.length === 1 && (!isAnonymous(descriptor) || position?.of === 1)) return { kind: 'found', id: matches[0]! };
+  if (matches.length === 1 && (position === undefined || position.of === 1)) return { kind: 'found', id: matches[0]! };
   const positioned = position !== undefined && position.of === matches.length ? matches[position.index] : undefined;
   return positioned === undefined
     ? { kind: 'failed', failure: 'target-ambiguous', candidates: matches }
     : { kind: 'found', id: positioned };
+}
+
+/** The independent kinds of evidence a fallback rests on; two that settle on different nodes disagree. */
+type RungEvidence = 'test-id' | 'name';
+
+/** One fallback rung: what it keeps of the recording, and the report label of a match on it. */
+interface FallbackRung {
+  readonly fallback: RelocationFallback;
+  readonly evidence: RungEvidence;
+  readonly matches: (candidate: TraceTargetDescriptor) => boolean;
+}
+
+/**
+ * Roles that are one kind of control to a user, so a role change inside a
+ * family is a refactor rather than another control: a link restyled as a
+ * button, a checkbox redrawn as a switch, a text field given suggestions.
+ * A role in no family never falls back across roles.
+ */
+const ROLE_FAMILIES: readonly ReadonlySet<string>[] = [
+  new Set(['button', 'link', 'menuitem', 'tab']),
+  new Set(['checkbox', 'switch', 'menuitemcheckbox']),
+  new Set(['radio', 'menuitemradio']),
+  new Set(['textbox', 'searchbox', 'combobox']),
+];
+
+/**
+ * The fallback rungs for one recorded descriptor, most stable first. A test
+ * id is the app's own name for a control and outlives copy changes, so it
+ * leads: with the role, then alone. The accessible name follows: the role
+ * and name alone (a test id, placeholder, or text that changed), the name
+ * across a role family, then the role and the shape of the label the
+ * control is named by, its name, else its text (`label-shape.ts`). Each rung
+ * is evidence of one kind; the first match of each kind is compared with the
+ * other's (`relocateRecorded`). None for an anonymous descriptor, whose
+ * place among its twins is all it has.
+ */
+function fallbackRungs(descriptor: TraceTargetDescriptor): readonly FallbackRung[] {
+  if (!isRelocatableDescriptor(descriptor) || isAnonymous(descriptor)) return [];
+  const rungs: FallbackRung[] = [];
+  const { testId, role, name } = descriptor;
+  if (testId !== undefined) {
+    if (role !== undefined) {
+      rungs.push({ fallback: 'test-id', evidence: 'test-id', matches: (candidate) => candidate.testId === testId && candidate.role === role });
+    }
+    rungs.push({ fallback: 'test-id', evidence: 'test-id', matches: (candidate) => candidate.testId === testId });
+  }
+  if (name !== undefined && role !== undefined) {
+    rungs.push({ fallback: 'accessible', evidence: 'name', matches: (candidate) => candidate.name === name && candidate.role === role });
+    const family = ROLE_FAMILIES.find((roles) => roles.has(role));
+    if (family !== undefined) {
+      rungs.push({
+        fallback: 'role-family',
+        evidence: 'name',
+        matches: (candidate) => candidate.name === name && candidate.role !== undefined && family.has(candidate.role),
+      });
+    }
+  }
+  const label = name ?? descriptor.text;
+  if (label !== undefined && role !== undefined) {
+    const named = name !== undefined;
+    rungs.push({
+      fallback: 'label-shape',
+      evidence: 'name',
+      matches: (candidate) => {
+        const live = named ? candidate.name : candidate.name === undefined ? candidate.text : undefined;
+        return candidate.role === role && live !== undefined && sameLabelShape(label, live);
+      },
+    });
+  }
+  return rungs;
 }
 
 /**
@@ -193,28 +385,25 @@ export function relocateDescriptor(
  * matches. The recorder uses the same projection to notice, before it writes a
  * target, that the description alone would not tell the target from its twins.
  */
-function matchingIds(
-  descriptor: TraceTargetDescriptor,
-  nodes: ReadonlyMap<string, RedactedNode>,
-): readonly string[] {
-  const candidates = describeNodes(nodes);
-  // A recorded container key must hold: the same "Delete" in another row is
-  // a different control. Checked against the tree the candidates came from,
-  // never guessed.
-  const keyed =
-    descriptor.within === undefined
-      ? candidates
-      : (() => {
-          const parents = parentsOf(nodes);
-          return candidates.filter(
-            (candidate) => containerKey(candidate.id, nodes, parents) === descriptor.within,
-          );
-        })();
+function matchingIds(descriptor: TraceTargetDescriptor, keyed: readonly DescribedNode[]): readonly string[] {
   for (const tier of descriptorTiers(descriptor)) {
     const matches = tierMatches(tier, keyed);
     if (matches.length > 0) return matches;
   }
   return [];
+}
+
+/**
+ * The candidates a descriptor may match: every projected node, or only those
+ * in the recorded container. A recorded container key must hold: the same
+ * "Delete" in another row is a different control. Checked against the tree
+ * the candidates came from, never guessed.
+ */
+function withinContainer(descriptor: TraceTargetDescriptor, nodes: ReadonlyMap<string, RedactedNode>): readonly DescribedNode[] {
+  const candidates = describeNodes(nodes);
+  if (descriptor.within === undefined) return candidates;
+  const parents = parentsOf(nodes);
+  return candidates.filter((candidate) => containerKey(candidate.id, nodes, parents) === descriptor.within);
 }
 
 function tierMatches(tier: TraceTargetDescriptor, candidates: readonly DescribedNode[]): string[] {
@@ -250,7 +439,7 @@ export function describePosition(
   // it is the only one, and described with a placeholder position to do so.
   const anonymous = isAnonymous(described);
   const probe = { ...described, ...(within === undefined ? {} : { within }), ...(anonymous ? { position: { index: 0, of: 1 } } : {}) };
-  const ids = matchingIds(probe, nodes);
+  const ids = matchingIds(probe, withinContainer(probe, nodes));
   if (ids.length < (anonymous ? 1 : 2) || ids.length > MAX_POSITIONED_TWINS) return undefined;
   const index = ids.indexOf(node.ref.id);
   return index === -1 ? undefined : { index, of: ids.length };

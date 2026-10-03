@@ -284,6 +284,19 @@ describe('deltaHolds', () => {
     expect(holds([{ role: 'alert', text: 'Session expires at 17:42' }], [node('x', { role: 'alert', text: 'Session expired' })])).toBe(false);
   });
 
+  it('reads the volatile parts of any anchor as placeholders, so a recording whose only effect reads a time passes its own replay', () => {
+    const start = nodes([heading]);
+    const delta = describeDelta(start, nodes([heading, node('s', { role: 'status', text: 'Saved at 10:42' })]), false);
+    expect(delta.appeared).toEqual([{ role: 'status', text: 'Saved at 10:42' }]);
+    const recorded = { endAnchors: delta.appeared, goneAnchors: delta.gone };
+    const replayEnd = nodes([heading, node('s2', { role: 'status', text: 'Saved at 10:45' })]);
+    expect(deltaHolds(recorded, replayEnd, start)).toBe(true);
+    expect(deltaEvidenced(recorded, start, [])).toBe(true);
+    // The same status already on screen before the replay acted proves nothing.
+    expect(deltaEvidenced(recorded, nodes([heading, node('s0', { role: 'status', text: 'Saved at 09:58' })]), [])).toBe(false);
+    expect(deltaHolds(recorded, nodes([heading, node('s3', { role: 'status', text: 'Save failed' })]), start)).toBe(false);
+  });
+
   it('forgives a churned test id when the other fields still identify the node', () => {
     const anchor = { role: 'link', name: 'PB-Twin-Alpha', testId: 'row-1a2b' };
     const rerendered = node('r2', { role: 'link', name: 'PB-Twin-Alpha', testId: 'row-9f8e' });

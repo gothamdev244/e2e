@@ -246,7 +246,10 @@ matches. Misses and hand-offs use the model; `agent.assert`,
   ids and tokens aside; unless the recording opens with a navigation),
   re-finds each control by role, name, test id, placeholder, input purpose,
   and its named row (an unnamed control with twins and no named container
-  hands off), and passes alone only when the recorded end route is back,
+  hands off), falling back to the test id, then the accessible name, then
+  the label with counts and times as placeholders, when a label or role
+  changed (`step.cache.relocated`; a read-write run then
+  re-records the step), and passes alone only when the recorded end route is back,
   every control that appeared (with its checked or selected state) is
   there, every one that went away is gone, at least one of those changed
   during the replay, and no new alert showed; otherwise the agent takes

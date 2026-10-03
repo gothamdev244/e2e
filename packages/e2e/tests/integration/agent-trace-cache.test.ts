@@ -260,6 +260,16 @@ test('cached step increments twice', async ({ app, agent, screen }) => {
 });
 `;
 
+const SOFT_FAILURE_THEN_PASS_SUITE = `import { test, expect } from 'e2e';
+
+test('cached step increments twice', async ({ app, agent, screen }) => {
+  await app.open();
+  await agent.act('increment the counter twice');
+  await expect.soft(screen.getByRole('status')).toHaveText('3');
+  await expect(screen.getByRole('status')).toHaveText('2');
+});
+`;
+
 describe('trace cache: unconfirmed traces are withheld and poisoned entries evicted', () => {
   let app: FixtureApp;
   let project: FixtureProject;
@@ -303,6 +313,14 @@ describe('trace cache: unconfirmed traces are withheld and poisoned entries evic
     expect(outcome.exitCode).not.toBe(0);
     // The afterEach hook's app.open passes with a higher step index than the
     // failed assertion; confirmation must stop at the failure, not at it.
+    expect(existsSync(cacheDir(project))).toBe(false);
+    project.cleanup();
+  }, 120_000);
+
+  it('a check that passes after a soft failure cannot confirm the trace the soft failure was about', async () => {
+    project = createProject({ 'tests/act.e2e.ts': SOFT_FAILURE_THEN_PASS_SUITE });
+    const outcome = await runExisting(project, options());
+    expect(outcome.exitCode).not.toBe(0);
     expect(existsSync(cacheDir(project))).toBe(false);
     project.cleanup();
   }, 120_000);

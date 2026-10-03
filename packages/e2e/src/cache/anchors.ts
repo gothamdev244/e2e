@@ -26,6 +26,7 @@
 import type { RedactedNode } from '../agent/observation.ts';
 import { describeTarget } from '../agent/actions.ts';
 import { collapseText } from '../internal/text.ts';
+import { AGE_PATTERNS } from './label-shape.ts';
 import { descriptorTiers, fieldsEqual, type DescriptorField } from './relocate.ts';
 import {
   bound,
@@ -110,6 +111,8 @@ export function describeDelta(
 /** One projected anchor with the node it came from. */
 interface AnchorNode {
   readonly descriptor: TraceTargetDescriptor;
+  /** The descriptor as anchors are compared (`anchorShape`), computed once per node. */
+  readonly shape: TraceTargetDescriptor;
   readonly key: string;
   readonly leaf: boolean;
 }
@@ -140,16 +143,15 @@ function deltaSide(
 
 /**
  * Text that cannot read the same on the next run: a minted key prefix or id,
- * a countdown or age, a date, a clock time, a timing in milliseconds. An
- * anchor made of it hands every replay off, so it is skipped while some
- * stable anchor exists; with nothing else, the volatile ones stay, because a
- * replay that always hands off is still safer than one that passes on
- * mechanics alone. An alert keeps it, and is compared with these parts read
- * as placeholders (`alertShape`).
+ * a countdown or age, a date, a clock time, a timing in milliseconds. Every
+ * anchor is compared with these parts read as placeholders (`anchorShape`),
+ * so `Saved at 10:42` is the effect `Saved at 10:45` repeats. A shape is
+ * weaker evidence than exact text, so such an anchor is skipped while some
+ * stable one exists; an alert keeps it whatever else there is.
  */
 const VOLATILE_TEXT: readonly RegExp[] = [
   /\b(?=[A-Za-z0-9_-]*\d)(?=[A-Za-z0-9_-]*[A-Za-z])[A-Za-z0-9_-]{12,}\b/,
-  /\b\d+\s*(?:ms|s|secs?|seconds?|m|mins?|minutes?|h|hrs?|hours?|d|days?|weeks?|months?|years?)\b/i,
+  ...AGE_PATTERNS,
   /\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(?:,?\s+\d{4})?\b/i,
   /\b\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?(?:\s+\d{4})?\b/i,
   /\b\d{4}-\d{2}-\d{2}\b/,
@@ -205,16 +207,19 @@ function isAlert(anchor: TraceTargetDescriptor): boolean {
 const VOLATILE_SPANS: readonly RegExp[] = VOLATILE_TEXT.map((pattern) => new RegExp(pattern.source, `${pattern.flags}g`));
 
 /**
- * An alert with its volatile parts read as one placeholder each: `Session
+ * An anchor with its volatile parts read as one placeholder each: `Session
  * expires at 17:42` and `Session expires at 17:45` are the same alert, which
- * a replay must neither miss nor mistake for one the recording never saw.
+ * a replay must neither miss nor mistake for one the recording never saw,
+ * and `Saved at 10:42` the same status. A recording whose only effect reads
+ * a time would otherwise fail its own replay on every run.
  */
-function alertShape(anchor: TraceTargetDescriptor): TraceTargetDescriptor {
+function anchorShape(anchor: TraceTargetDescriptor): TraceTargetDescriptor {
   const mask = (text: string) => VOLATILE_SPANS.reduce((masked, span) => masked.replace(span, '#'), text);
   return {
     ...anchor,
     ...(anchor.name === undefined ? {} : { name: mask(anchor.name) }),
     ...(anchor.text === undefined ? {} : { text: mask(anchor.text) }),
+    ...(anchor.value === undefined ? {} : { value: mask(anchor.value) }),
   };
 }
 
@@ -294,19 +299,18 @@ function identityKey(descriptor: TraceTargetDescriptor): string {
  * Whether some tier of a recorded anchor equals some projected node on every
  * anchor field, and on its value and states exactly: an empty field is not
  * the field filled in, nor an unchecked switch the switch turned on. An
- * alert is compared by its shape (`alertShape`).
+ * anchor is compared by its shape (`anchorShape`).
  */
 function anchorIn(anchor: TraceTargetDescriptor, nodes: readonly AnchorNode[]): boolean {
   const states = statesKey(anchor.states);
-  const shape = isAlert(anchor) ? alertShape : (descriptor: TraceTargetDescriptor) => descriptor;
-  return descriptorTiers(anchor).some((tier) =>
-    nodes.some(
+  const value = anchor.value === undefined ? undefined : anchorShape(anchor).value;
+  return descriptorTiers(anchor).some((tier) => {
+    const recorded = anchorShape(tier);
+    return nodes.some(
       (node) =>
-        node.descriptor.value === anchor.value &&
-        statesKey(node.descriptor.states) === states &&
-        fieldsEqual(shape(tier), shape(node.descriptor), ANCHOR_FIELDS),
-    ),
-  );
+        node.shape.value === value && statesKey(node.descriptor.states) === states && fieldsEqual(recorded, node.shape, ANCHOR_FIELDS),
+    );
+  });
 }
 
 /**
@@ -324,10 +328,10 @@ function projectAnchors(nodes: ReadonlyMap<string, RedactedNode>): readonly Anch
   for (const node of nodes.values()) {
     const descriptor = anchorDescriptor(node);
     if (descriptor === undefined) continue;
-    // An alert keyed by its shape: one whose countdown ticked while the step
-    // ran stayed on screen, and is on neither side of the delta.
-    const key = anchorKey(isAlert(descriptor) ? alertShape(descriptor) : descriptor);
-    anchors.push({ descriptor, key, leaf: node.children === undefined || node.children.length === 0 });
+    // Keyed by its shape: an alert whose countdown ticked while the step ran,
+    // or a clock, stayed on screen and is on neither side of the delta.
+    const shape = anchorShape(descriptor);
+    anchors.push({ descriptor, shape, key: anchorKey(shape), leaf: node.children === undefined || node.children.length === 0 });
   }
   projections.set(nodes, anchors);
   return anchors;

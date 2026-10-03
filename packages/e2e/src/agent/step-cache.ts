@@ -164,6 +164,14 @@ export class StepTraceSession {
    * nothing and an unconfirmed one still evicts.
    */
   private replayedWhole = false;
+  /**
+   * True once a replay found some control only by a fallback rung
+   * (`relocateRecorded`) and the control drifted beyond a tally or a time in
+   * its label (`ReplayOutcome.stale`): a step it still finished re-records
+   * rather than keeping the drifted entry. A label whose count moves every
+   * run would otherwise rewrite the entry on every run.
+   */
+  private replayDrifted = false;
   /** True once a cached entry's actions were run this step, fully or partly. */
   private consumedReplay = false;
   /** True once the store returned an entry for this step, whether or not it replayed. */
@@ -303,10 +311,12 @@ export class StepTraceSession {
    * - passed after the cache replayed the whole step: stage the entry to
    *   keep. Confirmed, it is left as it stands; re-writing it would change
    *   only its `createdAt`, dirtying a committed cache directory on every
-   *   run. Unconfirmed, it is evicted like a new recording would be. The
-   *   trade: a replay that still finds every control refreshes no descriptor,
-   *   anchor, or end wait, so drift is repaired only once a relocation fails
-   *   and the hand-off that follows re-records.
+   *   run. Unconfirmed, it is evicted like a new recording would be. A
+   *   replay that found a control only by a fallback rung, drifted beyond a
+   *   tally or a time in its label, re-records instead: the dispatch recorded every replayed action against the live
+   *   controls, so the staged trace carries today's descriptors and anchors,
+   *   and the next run matches exactly rather than drifting further from a
+   *   recording only the fallbacks still reach.
    * - passed otherwise: stage the recorded trace for attempt-end settlement.
    *   When this pass leaves nothing to stage (it changed nothing a replay
    *   could check) and an entry was read for the step, evict that entry: it
@@ -336,6 +346,7 @@ export class StepTraceSession {
       case 'passed':
         if (this.repairedAfterEndMismatch(recorder)) await this.evict();
         else if (this.replayedWhole) {
+          if (this.replayDrifted && (await this.stage(recorder, recordedVerdictOf(verdictSummary ?? '')))) return;
           this.cache.staged.push({
             kind: 'keep',
             keyHash: this.keyHash,
@@ -427,11 +438,14 @@ export class StepTraceSession {
       signal: host.signal,
       remainingMs: () => host.remainingMs(),
     };
+    // Set before the replay runs: a step timeout or other hard stop thrown
+    // from inside it still ran some of its actions, and the failure that
+    // follows implicates the entry like any other.
+    this.consumedReplay = true;
     const outcome = await replayTrace(watched, trace, {
       ...(start?.kind === 'semantic' ? { initial: start } : {}),
       looksBeforeFree: () => !onEndRoute(screens.at(-1)),
     });
-    this.consumedReplay = true;
     const stopReason: HandOffReason | undefined = outcome.completed
       ? start?.kind === 'semantic' && (await this.endStateMatches(trace, start, screens))
         ? undefined
@@ -509,10 +523,12 @@ export class StepTraceSession {
 
   private selfFinalize(trace: ActionTrace, outcome: ReplayOutcome): StepVerdict {
     this.replayedWhole = true;
+    this.replayDrifted = outcome.stale === true;
     this.info = {
       mode: 'self-finalized',
       replayedActions: outcome.executed,
       totalActions: outcome.total,
+      ...(outcome.relocated === undefined ? {} : { relocated: outcome.relocated }),
     };
     return { status: 'passed', summary: replaySummary(outcome.executed, trace.summary) };
   }
@@ -531,6 +547,7 @@ export class StepTraceSession {
       ...(outcome.derived === undefined ? {} : { derived: outcome.derived }),
       replayedActions: outcome.executed,
       totalActions: outcome.total,
+      ...(outcome.relocated === undefined ? {} : { relocated: outcome.relocated }),
     };
   }
 
