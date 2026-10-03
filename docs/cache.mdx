@@ -70,11 +70,19 @@ bunx e2e run --no-cache
 4. Finish without a model call, or let the agent continue with a record of
    what ran and why replay stopped.
 
+Replays run at the pace the recording saw. After each action the runner
+waits up to two seconds for the screen to change, then for it to hold
+still. An action that changed nothing on screen when it was recorded, such
+as a right-click that opens a native menu or a key that moves the cursor,
+is marked in the recording, and a replay waits only a short beat after it.
+
 ### Fallbacks
 
-UI copy changes more often than test ids. When no control matches
-everything recorded, the runner tries these in order and takes the first
-that finds exactly one control:
+UI copy changes more often than test ids. A control whose test id the app
+generates anew on each render is still an exact match when everything
+else recorded matches, and no other control carries the recorded test id.
+When no control matches everything recorded, the runner tries these in
+order and takes the first that finds exactly one control:
 
 1. The test id and the role: a button relabeled from `Save` to `Save changes`.
 2. The test id alone: the button also became a link.
@@ -91,7 +99,8 @@ moment later, so a page still leaving is never acted on. The recorded row
 or group still has to match, and when the test id points at one control and
 the name at another, the agent takes the step. A control recorded among
 identical twins is found only by its place among the same number of them.
-A control with no name has no fallback.
+A control recorded by its role alone, with no name, text, placeholder, or
+test id, has no fallback.
 
 A replay that used a fallback and passed re-records the step in
 `read-write` mode, so the next run matches exactly. A label whose count or
@@ -294,6 +303,8 @@ that changes how entries are matched re-keys every entry, so the first run
 after it records them again. A file changes when:
 
 - a step records for the first time,
+- an entry recorded by an `e2e` version before replay pacing gets its
+  pacing, once, from the next run that records or replays it,
 - the agent finishes a step after a hand-off, re-recording what it saw,
 - a replay found a control only by a [fallback](#fallbacks), re-recording
   the control as it reads now,
@@ -338,7 +349,10 @@ message names that file; delete it once nothing replays it. A custom
 `cache.store` is not checked this way. Entries recorded before this check
 existed are covered once a `read-write` run replays or re-records them. A
 step never recorded (a new or edited instruction or params), a retry, a
-`gap`, and a `truncated` recording still run live. `REPLAY_STALE` exits 2 and is not retried, since a
+`gap`, and a `truncated` recording still run live. A replay that needed a
+[fallback](#fallbacks) passes, since it made no model call; `relocated` in
+the run summary names it, so a read-only CI run shows which entries to
+re-record. `REPLAY_STALE` exits 2 and is not retried, since a
 retry never replays and would pass live. The entry stays where it is, even
 in `read-write` mode, so every strict run fails on it until it is re-recorded:
 run the test in `read-write` mode without the flag, and with `cache.strict`

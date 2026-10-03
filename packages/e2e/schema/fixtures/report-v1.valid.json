@@ -471,9 +471,10 @@
                     "ledgerBytes": 0
                   },
                   "cache": {
-                    "mode": "self-finalized",
+                    "mode": "agent-concluded",
+                    "reason": "target-not-found",
                     "replayedActions": 2,
-                    "totalActions": 2,
+                    "totalActions": 3,
                     "relocated": 1
                   },
                   "artifacts": [],

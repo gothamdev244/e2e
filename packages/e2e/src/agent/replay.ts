@@ -69,6 +69,34 @@ export interface ReplayHost {
   readonly actions: ExecutorActions;
   readonly signal: AbortSignal;
   remainingMs(): number;
+  /**
+   * Sets the change wait the next action arms in place of its settle
+   * policy's (`ActionDispatcher.paceNext`). Absent on a host that paces
+   * every action by its policy.
+   */
+  paceNext?(changeWaitMs: number): void;
+}
+
+/**
+ * The change wait after an action its recording saw leave the screen as it
+ * was (`RecordedAction.quiet`): long enough for a change that starts in the
+ * same frame to register, short enough that a replay does not spend the full
+ * wait the recording spent proving nothing changed.
+ */
+export const QUIET_CHANGE_WAIT_MS = 300;
+
+/** The grammar with every call paced as quiet: each one asks the host for the short change wait first. */
+function quietActions(host: ReplayHost): ExecutorActions {
+  return new Proxy(host.actions, {
+    get: (target, key, receiver) => {
+      const value: unknown = Reflect.get(target, key, receiver);
+      if (typeof value !== 'function') return value;
+      return (...args: unknown[]): unknown => {
+        host.paceNext?.(QUIET_CHANGE_WAIT_MS);
+        return (value as (...args: unknown[]) => unknown).apply(target, args);
+      };
+    },
+  });
 }
 
 export interface ReplayOutcome {
@@ -277,7 +305,10 @@ export async function replayTrace(
   let previous: RecordedAction | undefined;
   for (const action of trace.actions) {
     if (!host.traceEligible) return stop('action-failed');
-    const planned = planCall(action, host.actions);
+    // An action its recording saw change nothing waits only a beat for a
+    // change: the pace follows the recording, not the change timeout.
+    const actions = action.quiet === true ? quietActions(host) : host.actions;
+    const planned = planCall(action, actions);
     if (planned.kind === 'gap') {
       return { ...stop('gap'), ...(planned.derived === undefined ? {} : { derived: planned.derived }) };
     }
@@ -328,7 +359,7 @@ export async function replayTrace(
             // a settled look of its own, as the live loop did between them.
             for (let index = 0; index < planned.times; index += 1) {
               if (index > 0) await host.observe('held-still');
-              await host.actions.scroll(planned.direction);
+              await actions.scroll(planned.direction);
               repeated += 1;
             }
             break;
@@ -343,12 +374,12 @@ export async function replayTrace(
         }
         case 'scrollUntil': {
           if (planned.list === undefined) {
-            await host.actions.scrollUntil(planned.text, planned.direction);
+            await actions.scrollUntil(planned.text, planned.direction);
             break;
           }
           const found = await refind(planned.list.descriptor, look);
-          if (found.kind === 'found') await host.actions.scrollUntil(planned.text, planned.direction, { id: found.id });
-          else if ((planned.list.spans ?? 0) >= MAIN_LIST_SHARE) await host.actions.scrollUntil(planned.text, planned.direction);
+          if (found.kind === 'found') await actions.scrollUntil(planned.text, planned.direction, { id: found.id });
+          else if ((planned.list.spans ?? 0) >= MAIN_LIST_SHARE) await actions.scrollUntil(planned.text, planned.direction);
           else return stop(found.failure);
           break;
         }
@@ -356,7 +387,7 @@ export async function replayTrace(
           const pair = await relocatePair(host, planned.source, planned.destination, look);
           if (pair.kind === 'failed') return stop(pair.failure);
           pair.ends.forEach(note);
-          await host.actions.drag({ id: pair.ends[0].id }, { id: pair.ends[1].id });
+          await actions.drag({ id: pair.ends[0].id }, { id: pair.ends[1].id });
           break;
         }
         case 'point': {
@@ -472,8 +503,10 @@ async function relocate(
  * screen still leaving (a wizard's previous page, whose "Next" shares the
  * test id of this page's "Save") can hold a node that part fits. So a node a
  * fallback found is acted on only when the next look finds the same node,
- * by the same rung, again: a screen that moved on in between fails the
- * check, and the poll looks once more.
+ * by the same rung, in the same place, again: a screen that moved on in
+ * between fails the check, and the poll looks once more. The place is the
+ * node's box, which also tells apart identical twins that swapped order
+ * between the two looks, where the descriptor alone could not.
  */
 class FallbackSighting {
   private previous: string | undefined;
@@ -488,12 +521,18 @@ class FallbackSighting {
     if (results.every((result) => result.fallback === undefined)) return true;
     const seen = JSON.stringify(results.map((result) => {
       const node = nodes.get(result.id);
-      return [result.fallback ?? null, node === undefined ? null : describeTarget(node) ?? null];
+      return [result.fallback ?? null, node === undefined ? null : describeTarget(node) ?? null, placeOf(node)];
     }));
     const confirmed = seen === this.previous;
     this.previous = seen;
     return confirmed;
   }
+}
+
+/** A node's box rounded to whole pixels, or null without one: where it sits, as two looks compare it. */
+function placeOf(node: RedactedNode | undefined): readonly number[] | null {
+  const box = node?.rect;
+  return box === undefined ? null : [box.x, box.y, box.width, box.height].map(Math.round);
 }
 
 /**

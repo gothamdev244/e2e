@@ -1,6 +1,6 @@
 {
   "schemaVersion": "trace-1",
-  "createdAt": "2026-10-03T17:50:31.245Z",
+  "createdAt": "2026-10-03T22:30:41.315Z",
   "payload": {
     "actions": [
       {
@@ -10,7 +10,8 @@
           "role": "button",
           "name": "Attachments",
           "within": "Files"
-        }
+        },
+        "quiet": true
       },
       {
         "name": "upload",

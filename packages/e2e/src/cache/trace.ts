@@ -158,6 +158,15 @@ const isTraceAnchorState = oneOf(TRACE_ANCHOR_STATES);
 interface ActionBase {
   /** One-line prose summary — the only view a mid-step hand-off notice shows. */
   readonly summary: string;
+  /**
+   * Set when the recording saw the screen keep the shape the action was
+   * resolved against for the action's whole change wait: a tap that opened
+   * a native menu, a key that moved a caret. A replay waits only a short
+   * beat for a change after it (`QUIET_CHANGE_WAIT_MS`) rather than the
+   * full wait the recording spent proving nothing changed, so a replay is
+   * paced by what the recording saw, not by timeouts.
+   */
+  readonly quiet?: true;
 }
 
 /** The verbs that act on one node and carry no input: tap and its variants, hover, scroll into view. */
@@ -517,7 +526,14 @@ function readRecordedAction(document: unknown): RecordedAction | undefined {
   if (typeof document !== 'object' || document === null || Array.isArray(document)) {
     return undefined;
   }
-  const raw = document as Record<string, unknown>;
+  const quiet = (document as Record<string, unknown>)['quiet'];
+  if (quiet !== undefined && quiet !== true) return undefined;
+  const action = readActionBody(document as Record<string, unknown>);
+  return action === undefined || quiet === undefined ? action : { ...action, quiet };
+}
+
+/** One action's variant fields, read and validated; `quiet` is read by the caller. */
+function readActionBody(raw: Record<string, unknown>): RecordedAction | undefined {
   const summary = readBoundedText(raw['summary'], MAX_TRACE_SUMMARY_CHARS);
   if (summary === undefined) return undefined;
 

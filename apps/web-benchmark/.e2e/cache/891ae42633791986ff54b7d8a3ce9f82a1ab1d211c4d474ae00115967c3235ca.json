@@ -1,6 +1,6 @@
 {
   "schemaVersion": "trace-1",
-  "createdAt": "2026-10-03T17:52:21.048Z",
+  "createdAt": "2026-10-03T22:32:44.892Z",
   "payload": {
     "actions": [
       {
@@ -11,7 +11,8 @@
         "target": {
           "testId": "table-viewport"
         },
-        "spans": 0.3083
+        "spans": 0.3083,
+        "quiet": true
       },
       {
         "name": "tap",

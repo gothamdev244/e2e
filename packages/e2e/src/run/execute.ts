@@ -1227,8 +1227,12 @@ export class TargetExecutor implements SerialHost {
     // entry.
     if (cache !== undefined && record.status !== 'interrupted') {
       await flushStagedTraces(cache, {
-        lastVerifiedStepIndex:
-          failure === undefined ? steps.lastVerifiedStepIndex : Math.min(lastVerifiedAtFailure, attemptSoft?.verifiedBeforeFirstFailure ?? Infinity),
+        // A soft failure bounds confirmation whatever the verdict, a skip
+        // that leaves no failure included.
+        lastVerifiedStepIndex: Math.min(
+          failure === undefined ? steps.lastVerifiedStepIndex : lastVerifiedAtFailure,
+          attemptSoft?.verifiedBeforeFirstFailure ?? Infinity,
+        ),
         implicatesUnconfirmed: failure === undefined || implicatesUnconfirmed,
       });
     }

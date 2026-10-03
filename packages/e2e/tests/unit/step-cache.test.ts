@@ -534,6 +534,33 @@ describe('StepTraceSession', () => {
     expect(deleted).toEqual(['a'.repeat(64)]);
   });
 
+  it('keeps an entry when a hard stop lands while the replay only looked, before any recorded action ran', async () => {
+    const deleted: string[] = [];
+    const context = entryContext({
+      actions: [{ name: 'tap', summary: 'tap button "Upgrade"', target: { role: 'button', name: 'Upgrade' } }],
+      startPath: '/pricing',
+    });
+    context.store.delete = async (keyHash) => {
+      deleted.push(keyHash);
+    };
+    const host = makeHost(['/pricing']);
+    let looks = 0;
+    const session = makeSession(context, {
+      ...host,
+      remainingMs: () => 60_000,
+      // The start capture shows no Upgrade yet; the relocation's next look is cut off.
+      observe: async (mode) => {
+        looks += 1;
+        if (looks > 1) throw new AgentError('STEP_TIMEOUT', 'the step ran out of time');
+        return host.observe(mode);
+      },
+      actions: { tap: async () => undefined } as unknown as ExecutorActions,
+    });
+    await expect(session.begin()).rejects.toMatchObject({ code: 'STEP_TIMEOUT' });
+    await session.conclude('failed', undefined);
+    expect(deleted).toEqual([]);
+  });
+
   it('evicts nothing on failure when no replay was consumed', async () => {
     const deleted: string[] = [];
     const context = fakeContext(async () => ({ status: 'miss' }));

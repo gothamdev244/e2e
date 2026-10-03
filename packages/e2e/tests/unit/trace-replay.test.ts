@@ -414,14 +414,28 @@ describe('replayTrace', () => {
     const next: SemanticNode = { ref: { id: 'w1', revision: 'r1' }, role: 'button', name: 'Next', testId: 'primary' };
     const save: SemanticNode = { ref: { id: 'w2', revision: 'r1' }, role: 'button', name: 'Save', testId: 'primary' };
     const screens = [[next], [save]];
-    const host = makeHost({});
+    const tapped: unknown[] = [];
+    const host = makeHost({ onAction: (name, detail) => void (name === 'tap' && tapped.push(detail)) });
     host.capture = async () => {
       host.observations += 1;
       return screen(screens.length > 1 ? screens.shift()! : screens[0]!);
     };
     const outcome = await replayTrace(host, trace([{ ...tapUpgrade, summary: 'tap button "Save"', target: { role: 'button', name: 'Save', testId: 'primary' } }]));
     expect(outcome).toEqual({ completed: true, executed: 1, total: 1, summaries: ['tap button "Save"'] });
-    expect(host.calls).toEqual(['tap']);
+    expect(tapped).toEqual([{ id: 'w2' }]);
+  });
+
+  it('confirms a fallback match only once it holds its place, so a control still sliding in is not tapped mid-move', async () => {
+    const at = (y: number): SemanticNode => ({ ref: { id: 'c', revision: 'r1' }, role: 'button', name: 'Configure', testId: 'setup', rect: { x: 0, y, width: 100, height: 20 } });
+    const screens = [[at(300)], [at(40)], [at(40)]];
+    const host = makeHost({});
+    host.capture = async () => {
+      host.observations += 1;
+      return screen(screens.length > 1 ? screens.shift()! : screens[0]!);
+    };
+    const outcome = await replayTrace(host, trace([{ ...tapUpgrade, summary: 'tap button "Set up"', target: { role: 'button', name: 'Set up', testId: 'setup' } }]));
+    expect(outcome).toMatchObject({ completed: true, relocated: 1 });
+    expect(host.looks).toEqual(['held-still', 'raw', 'raw']);
   });
 
   it('looks again when a test id and a name disagree, since a screen still settling may resolve them', async () => {
@@ -429,13 +443,15 @@ describe('replayTrace', () => {
     const arriving: SemanticNode = { ref: { id: 'w2', revision: 'r1' }, role: 'button', name: 'Save', testId: 'save-v2' };
     const settled: SemanticNode = { ref: { id: 'w3', revision: 'r1' }, role: 'button', name: 'Save', testId: 'primary' };
     const screens = [[leaving, arriving], [settled]];
-    const host = makeHost({});
+    const tapped: unknown[] = [];
+    const host = makeHost({ onAction: (name, detail) => void (name === 'tap' && tapped.push(detail)) });
     host.capture = async () => {
       host.observations += 1;
       return screen(screens.length > 1 ? screens.shift()! : screens[0]!);
     };
     const outcome = await replayTrace(host, trace([{ ...tapUpgrade, summary: 'tap button "Save"', target: { role: 'button', name: 'Save', testId: 'primary' } }]));
     expect(outcome).toEqual({ completed: true, executed: 1, total: 1, summaries: ['tap button "Save"'] });
+    expect(tapped).toEqual([{ id: 'w3' }]);
   });
 
   it('diverges immediately on ambiguity', async () => {

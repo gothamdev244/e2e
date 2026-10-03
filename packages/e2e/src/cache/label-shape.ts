@@ -45,15 +45,14 @@ const AGE_MARK = '<age>';
  * reads `<age>`; a tally reads `#` and its noun is reduced to a stem its
  * singular and plural share (`reply`/`replies`, `match`/`matches`), so
  * `Reply (0 replies)` and `Reply (1 reply)` are one shape. A tally is a
- * leading count (`LEADING_COUNT`) that agrees with its noun, one with a
- * singular and any other with a plural, so `Seat 12 window` and `3 menu`
- * read as they are. Case and whitespace are folded too.
+ * leading count (`LEADING_COUNT`) that agrees with its noun: one with any
+ * noun, any other count with a plural, so `3 menu` reads as it is. Case and whitespace are folded too.
  */
 function labelShape(label: string): string {
   // Times fold before the case does: `3 M` is a size, `3 m` an age.
   const timed = AGES.reduce((text, age) => text.replace(age, AGE_MARK), label.replace(RELATIVE_TIME, AGE_MARK)).toLowerCase();
   const counted = timed.replace(LEADING_COUNT, (match, lead: string, count: string, space: string, noun: string) =>
-    (count === '1') === !noun.endsWith('s') ? `${lead}#${space}${countedStem(noun)}` : match,
+    count === '1' || noun.endsWith('s') ? `${lead}#${space}${countedStem(noun)}` : match,
   );
   return counted.replace(/\s+/g, ' ').trim();
 }
@@ -64,8 +63,17 @@ function labelShape(label: string): string {
  * endings folded to `i`.
  */
 function countedStem(noun: string): string {
-  const singular = /(?:[sxz]|[cs]h)es$/.test(noun) ? noun.slice(0, -2) : noun.length > 3 && noun.endsWith('s') ? noun.slice(0, -1) : noun;
+  const singular = /(?:[sxz]|[cs]h)es$/.test(noun)
+    ? noun.slice(0, -2)
+    : noun.length > 3 && noun.endsWith('s') && !noun.endsWith('ss')
+      ? noun.slice(0, -1)
+      : noun;
   return singular.replace(/(?:ie|y)$/, 'i');
+}
+
+/** Whether a label carries a tally or a time the shape reads as a placeholder. */
+export function carriesState(label: string): boolean {
+  return labelShape(label) !== label.replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
 /**

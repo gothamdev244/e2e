@@ -103,6 +103,8 @@ export class ActionDispatcher {
    * rather than a guess.
    */
   readonly actions: ExecutorActions;
+  /** The change wait the next action arms in place of its policy's (`paceNext`). */
+  private nextChangeWaitMs: number | undefined;
 
   constructor(
     private readonly runtime: AgentContext,
@@ -545,7 +547,20 @@ export class ActionDispatcher {
     return this.queue.run(() => this.runActionNow(name, body));
   }
 
+  /**
+   * Sets the change wait the next committed action arms, in place of its
+   * settle policy's. A replay calls it before an action its recording saw
+   * leave the screen as it was (`RecordedAction.quiet`), so the replay does
+   * not wait out a change the recording proved never comes. Consumed by the
+   * next action, whether it commits or not.
+   */
+  paceNext(changeWaitMs: number): void {
+    this.nextChangeWaitMs = changeWaitMs;
+  }
+
   private async runActionNow(name: GrammarActionName, body: () => Promise<RecordableAction>): Promise<void> {
+    const paced = this.nextChangeWaitMs;
+    this.nextChangeWaitMs = undefined;
     this.accounting.reserveAction();
     const redaction = { redact: this.runtime.redact, redactCut: this.runtime.redactCut };
     let action: RecordableAction;
@@ -560,9 +575,20 @@ export class ActionDispatcher {
       this.accounting.checkpoint(cause);
       throw cause;
     }
-    this.armAfter(action.name);
+    const armed = this.armAfter(action.name, paced);
     const trace = this.options.trace();
     if (trace === undefined) return;
+    // Told after the action is in the trace, so the settle the next look
+    // reports is noted against the action that armed it.
+    try {
+      this.recordAction(trace, action);
+    } finally {
+      if (armed) trace.armedChange();
+    }
+  }
+
+  /** Records one committed action into the step trace, or the gap it stands for. */
+  private recordAction(trace: StepTraceSession, action: RecordableAction): void {
     // A typed value the step read off the screen (its tree, or a screenshot
     // it was shown) or reckoned from the date is this run's data, not the
     // flow's: it is recorded as a gap so replay hands over before it rather
@@ -590,10 +616,12 @@ export class ActionDispatcher {
    * would wait against the destination screen. An action whose effect the
    * tree cannot show arms nothing.
    */
-  private armAfter(name: RecordedAction['name']): void {
-    if (name === 'scrollUntil' && !this.verbs.has('scrollTo')) return;
+  private armAfter(name: RecordedAction['name'], paced?: number): boolean {
+    if (name === 'scrollUntil' && !this.verbs.has('scrollTo')) return false;
     const { changeWaitMs } = SETTLE_AFTER[name];
-    if (changeWaitMs !== undefined) this.feed.armChange(changeWaitMs);
+    if (changeWaitMs === undefined) return false;
+    this.feed.armChange(paced === undefined ? changeWaitMs : Math.min(paced, changeWaitMs));
+    return true;
   }
 
   /**

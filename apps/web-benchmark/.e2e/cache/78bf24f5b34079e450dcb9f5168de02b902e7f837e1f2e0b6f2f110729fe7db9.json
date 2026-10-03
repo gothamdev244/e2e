@@ -1,6 +1,6 @@
 {
   "schemaVersion": "trace-1",
-  "createdAt": "2026-10-03T17:50:28.780Z",
+  "createdAt": "2026-10-03T22:30:38.889Z",
   "payload": {
     "actions": [
       {
@@ -10,7 +10,8 @@
           "role": "listitem",
           "name": "report.pdf",
           "within": "Files"
-        }
+        },
+        "quiet": true
       },
       {
         "name": "secondaryTap",

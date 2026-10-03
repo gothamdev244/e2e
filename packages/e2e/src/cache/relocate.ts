@@ -24,7 +24,7 @@
 
 import type { RedactedNode } from '../agent/observation.ts';
 import { containerKey, describeTarget, parentsOf } from '../agent/actions.ts';
-import { sameLabelShape } from './label-shape.ts';
+import { carriesState, sameLabelShape } from './label-shape.ts';
 import type { TracePosition, TraceTargetDescriptor } from './trace.ts';
 
 /**
@@ -279,13 +279,14 @@ export function relocateRecorded(
 /**
  * Whether a recorded target and the live node differ only in a tally or a
  * time in their label: every other identity field equal, and the name and
- * the text each equal or of one shape (`sameLabelShape`).
+ * the text each equal, or of one shape (`sameLabelShape`) with a tally or a
+ * time in it. A label that changed only in case is a change to heal.
  */
 function labelDriftOnly(recorded: TraceTargetDescriptor, live: TraceTargetDescriptor): boolean {
   const label = (field: 'name' | 'text') => {
     const was = recorded[field];
     const now = live[field];
-    return was === now || (was !== undefined && now !== undefined && sameLabelShape(was, now));
+    return was === now || (was !== undefined && now !== undefined && carriesState(was) && sameLabelShape(was, now));
   };
   return fieldsIdentical(recorded, live, ['role', 'testId', 'placeholder', 'inputPurpose']) && label('name') && label('text');
 }

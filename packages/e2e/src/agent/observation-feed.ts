@@ -91,6 +91,13 @@ export class ObservationFeed {
    * repairs what already worked.
    */
   private pendingChange: PendingChange | undefined;
+  /**
+   * Told, once a settled look consumed a pending change wait, whether the
+   * screen left the shape the action was resolved against. The trace
+   * recorder keeps the answer, so a replay paces each action the way its
+   * recording saw it settle (`RecordedAction.quiet`).
+   */
+  onChangeSettled: ((changed: boolean) => void) | undefined;
   /** The last pixel decision recorded on this step: `allowed`, or the withheld reason. */
   private pixelsDecided: string | undefined;
   /** Why requested pixels did not become model input, when they did not. */
@@ -317,7 +324,7 @@ export class ObservationFeed {
     if (mode === 'raw') return this.capture(pixels);
     const changedFrom = this.pendingChange;
     this.pendingChange = undefined;
-    return settleObservation(
+    const settled = settleObservation(
       () => this.capture(pixels),
       observationShape,
       {
@@ -334,6 +341,12 @@ export class ObservationFeed {
         transitional: isTransitionalObservation,
       },
     );
+    if (changedFrom === undefined) return settled;
+    return settled.then((observation) => {
+      const shape = changeShape(observation);
+      this.onChangeSettled?.(shape === undefined || shape !== changedFrom.shape);
+      return observation;
+    });
   }
 
   /** Makes an observation the newest, remembers it among the recent ones, and books its size. */

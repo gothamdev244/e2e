@@ -44,7 +44,12 @@ export type StagedTrace = {
   readonly stepIndex: number;
 } & (
   | { readonly kind: 'write'; readonly trace: ActionTrace }
-  | { readonly kind: 'keep'; readonly recordedFor: TraceProvenance }
+  | {
+      readonly kind: 'keep';
+      readonly recordedFor: TraceProvenance;
+      /** Indices of the actions the replay saw change nothing (`RecordedAction.quiet`), for an entry recorded before pacing was. */
+      readonly quiet?: readonly number[];
+    }
 );
 
 /** One step's claimed key: its hash, and the step it names as an entry records it. */
@@ -93,16 +98,24 @@ export interface AgentCacheContext {
 
 /**
  * Whether the store already holds this flow: the same actions, paths, anchors,
- * executor, and provenance. The model's summary, the measured end wait, and
- * the rule that flagged a gap's typed value (`derived`, which follows how the
- * agent read the value this time) differ between live runs, so a step that
- * runs live each time (it types a value read off the screen) would otherwise
- * rewrite an entry a committed cache directory carries. A replay stops at a
- * gap whatever its rule, which only names the hand-off in the report.
+ * executor, and provenance. The model's summary, the measured end wait, the
+ * rule that flagged a gap's typed value (`derived`, which follows how the
+ * agent read the value this time), and which actions settled quietly (a
+ * timing) differ between live runs, so a step that runs live each time (it
+ * types a value read off the screen) would otherwise rewrite an entry a
+ * committed cache directory carries. A replay stops at a gap whatever its
+ * rule, which only names the hand-off in the report. An entry recorded
+ * before pacing was learns it once from the first run that has it.
  */
 async function holdsSameFlow(store: CacheStore, keyHash: string, trace: ActionTrace): Promise<boolean> {
   const existing = await store.read(keyHash);
-  return existing.status === 'hit' && flowOf(existing.entry.payload) === flowOf(trace);
+  if (existing.status !== 'hit' || flowOf(existing.entry.payload) !== flowOf(trace)) return false;
+  return isPaced(existing.entry.payload) || !isPaced(trace);
+}
+
+/** Whether a trace says how any of its actions settled (`RecordedAction.quiet`). */
+function isPaced(trace: ActionTrace): boolean {
+  return trace.actions.some((action) => action.quiet === true);
 }
 
 /** The part of a trace that decides what a replay does, as canonical JSON. */
@@ -111,23 +124,40 @@ function flowOf(trace: ActionTrace): string {
   return canonicalJson({
     ...flow,
     actions: actions.map((action) => {
-      if (action.name !== 'tool') return action;
-      const { derived: _derived, ...gap } = action;
+      const { quiet: _quiet, ...paced } = action;
+      if (paced.name !== 'tool') return paced;
+      const { derived: _derived, ...gap } = paced;
       return gap;
     }),
   });
 }
 
 /**
- * Writes the step's full provenance into a kept entry recorded before the
- * occurrence fields were, leaving every other entry untouched. Its replay
- * proved which step it belongs to, and `cache.strict` matches only entries
- * that say so exactly (`rekeyed.ts`).
+ * Completes a kept entry with what it was recorded without, leaving every
+ * other entry untouched: the step's full provenance, for one recorded before
+ * the occurrence fields were (its replay proved which step it belongs to, and
+ * `cache.strict` matches only entries that say so exactly, `rekeyed.ts`), and
+ * the actions its replay saw settle quietly, for one recorded before pacing
+ * was. The replay waited every action's full change wait, so what it saw is
+ * what a recording would have.
  */
-async function completeProvenance(store: CacheStore, keyHash: string, recordedFor: TraceProvenance): Promise<void> {
+async function completeEntry(
+  store: CacheStore,
+  keyHash: string,
+  recordedFor: TraceProvenance,
+  quiet: readonly number[] | undefined,
+): Promise<void> {
   const existing = await store.read(keyHash);
-  if (existing.status !== 'hit' || existing.entry.payload.recordedFor?.callIndex !== undefined) return;
-  await store.write(keyHash, { ...existing.entry.payload, recordedFor });
+  if (existing.status !== 'hit') return;
+  const payload = existing.entry.payload;
+  const provenance = payload.recordedFor?.callIndex === undefined;
+  const pacing = quiet !== undefined && quiet.length > 0 && !isPaced(payload) && quiet.every((index) => index < payload.actions.length);
+  if (!provenance && !pacing) return;
+  await store.write(keyHash, {
+    ...payload,
+    ...(provenance ? { recordedFor } : {}),
+    ...(pacing ? { actions: payload.actions.map((action, index) => (quiet.includes(index) ? { ...action, quiet: true as const } : action)) } : {}),
+  });
 }
 
 /** How an attempt ended, as the settlement of its staged entries reads it. */
@@ -172,7 +202,7 @@ export async function flushStagedTraces(context: AgentCacheContext, settlement: 
         continue;
       }
       if (entry.kind === 'keep') {
-        await completeProvenance(context.store, entry.keyHash, entry.recordedFor);
+        await completeEntry(context.store, entry.keyHash, entry.recordedFor, entry.quiet);
         continue;
       }
       if (await holdsSameFlow(context.store, entry.keyHash, entry.trace)) continue;

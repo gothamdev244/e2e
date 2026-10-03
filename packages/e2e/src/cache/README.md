@@ -129,6 +129,35 @@ entry keeps replaying through the fallback; `step.cache.relocated` (report),
 `relocated` (run summary), and `agent_steps_relocated` (telemetry) make that
 visible.
 
+## Pacing
+
+A replay runs no model, so its speed is set by how long it waits for the
+app. Every action arms a change wait (`agent/settle-policy.ts`): the next
+settled look waits up to 2 s for the screen to leave the shape the action
+was resolved against, then for it to hold still. An action whose effect the
+tree never shows (a right-click that opens a native menu, a key that moves a
+caret, a tap that only arms the next control) waits the full 2 s every time.
+
+The recording notes how each action settled. `ObservationFeed` reports
+whether a settled look saw the screen change, the dispatcher tells the
+recorder which action armed the wait (`armedChange`), and an action that
+changed nothing is stored `quiet`. A replay arms a 300 ms change wait for a
+quiet action instead (`QUIET_CHANGE_WAIT_MS`, `ActionDispatcher.paceNext`),
+so it is paced by what the recording saw rather than by timeouts. The held
+still check after it, relocation polling, and the end-state wait are
+unchanged, so a change that does come late is still waited for.
+
+`quiet` is a timing, so it never counts as a new flow (`flowOf`). An entry
+recorded before pacing learns it once: from the next recording of the same
+flow, or from a whole replay, which waited every action's full change wait
+(`completeEntry`). A folded scroll is always paced in full.
+
+Measured on the web benchmark's agentic suite (median of three read-only
+runs each, every step replayed): the steps with a quiet action went from
+2.3 to 2.6 s down to 0.6 to 1.0 s, and the suite's replayed steps from
+28.9 s to 20.3 s, excluding one 431-page `scrollUntil` whose time is the
+paging itself. Run to run spread stays under 2%.
+
 ## Anchors: the postcondition
 
 Actions that ran prove the clicks happened, not that the save took. A
@@ -210,8 +239,38 @@ A write is skipped when the stored entry already holds the same flow
 | Templates | `tests/unit/trace-template.test.ts` |
 | Key, store, entry format | `trace-identity`, `trace-store`, `trace-cache`, `trace-recorder`, `trace-redaction` |
 | Session write side, strict, healing | `tests/unit/step-cache.test.ts` |
+| Pacing | `tests/unit/trace-pacing.test.ts`, the `/arm` case in `agent-trace-cache.test.ts` |
 | End to end with a browser | `tests/integration/agent-trace-cache.test.ts`, `trace-cache-replay.test.ts` |
 | Real apps | `apps/web-benchmark` (`--strict-cache` in CI), `apps/mobile-benchmark` |
+
+## Live drift probe
+
+Unit tests cannot show that a replay against a changed app does the right
+thing end to end. The probe that checks it is a scratch server whose pages
+differ between a `record` and a `drift` mode, run through the real CLI and a
+real model: record once, copy the entries to each build, replay. Not
+committed (the dead-code check rejects its server); rebuild it from this
+table when a rule here changes, and run it on `main` and the branch.
+
+| Page | Drift | Expected |
+| --- | --- | --- |
+| counter | `Increment` does nothing | `end-mismatch`, never a pass on `Count: 0` |
+| items | `Delete item 3` gone, `Delete item 4` left | `target-not-found`, item 4 untouched |
+| form | field id `mat-input-2` moves to another field | replays by label |
+| testid | `Save` relabeled `Save changes`, same test id | replays, `test-id`, heals |
+| likes | `Like (0 likes)` to `Like (3 likes)` | replays, `label-shape`, not healed |
+| settings | link becomes a button | replays, `role-family`, heals |
+| clock | none; the effect reads the time | replays (failed every run before anchor shapes) |
+| async | none; the control renders 1.2 s after load | replays after relocation polling |
+| shuffle | none; rows in random order | replays on the named row |
+| ago | `posted 2m ago` to `posted 5m ago` | replays, `label-shape`, not healed |
+| confirm | a new confirm dialog after Delete | `end-mismatch` on the new alert, evicted, re-recorded |
+| removed | the control is gone | `target-not-found` |
+| ab | label picked per load under a stable test id | replays, `test-id` |
+
+Last run 2026-10-04: every row as expected on this branch; `main` handed off
+or missed on testid, likes, settings, clock, ago, and on ab when the label
+flipped, with 16 model calls to the branch's 5.
 
 ## Audit, 2026-10-03
 

@@ -60,6 +60,21 @@ export class TraceRecorder {
   }
 
   private lastActionAt: number | undefined;
+  /** Index of the action the last `push` stored on its own: undefined after a fold or a dropped action. */
+  private lastPushed: number | undefined;
+  /** Index of the action whose change wait the next settled look reports on (`noteSettled`). */
+  private awaitingSettle: number | undefined;
+
+  /**
+   * The indices of the recorded actions that settled quietly, when the
+   * recording is action for action the `names` given (a whole replay of an
+   * entry), else none: an index into a different list would mark the wrong
+   * action.
+   */
+  quietIndices(names: readonly string[]): number[] {
+    if (this.actions.length !== names.length || this.actions.some((action, index) => action.name !== names[index])) return [];
+    return this.actions.flatMap((action, index) => (action.quiet === true ? [index] : []));
+  }
 
   /** Number of actions recorded so far, gaps included. */
   get recordedCount(): number {
@@ -75,6 +90,28 @@ export class TraceRecorder {
   record(action: RecordableAction): void {
     this.push(this.toRecorded(action, describeAction(action, { redact: this.redact, redactCut: this.redactCut })));
     this.lastActionAt = Date.now();
+  }
+
+  /**
+   * Notes that the action just recorded armed a change wait, so the settle
+   * the next look reports is about it. An action folded into the one before
+   * it, or dropped at the cap, is noted against nothing.
+   */
+  armedChange(): void {
+    this.awaitingSettle = this.lastPushed;
+  }
+
+  /**
+   * Notes whether the screen left the shape the awaiting action was resolved
+   * against within its change wait. One that did not is marked `quiet`, and a
+   * replay will not wait out the change the recording proved never comes.
+   */
+  noteSettled(changed: boolean): void {
+    const index = this.awaitingSettle;
+    this.awaitingSettle = undefined;
+    if (index === undefined || changed) return;
+    const action = this.actions[index];
+    if (action !== undefined) this.actions[index] = { ...action, quiet: true };
   }
 
   /**
@@ -253,10 +290,13 @@ export class TraceRecorder {
     // action that ran several times, not several actions: a long list paged
     // to its end fits the trace, and replays with the same repeats.
     const last = this.actions[this.actions.length - 1];
+    this.lastPushed = undefined;
     if (action.name === 'scroll' && last?.name === 'scroll' && sameScroll(last, action)) {
       // The smallest coverage of the repeats decides the viewport fallback,
       // so a list that shrank on the way is never promoted by its first size.
-      const { spans: previous, ...rest } = last;
+      // A folded scroll is paced in full: only its first repeat would take a
+      // replay's override, and nothing says that repeat was the quiet one.
+      const { spans: previous, quiet: _quiet, ...rest } = last;
       const spans = previous === undefined || action.spans === undefined ? undefined : Math.min(previous, action.spans);
       this.actions[this.actions.length - 1] = { ...rest, times: (last.times ?? 1) + 1, ...(spans === undefined ? {} : { spans }) };
       return;
@@ -266,6 +306,7 @@ export class TraceRecorder {
       return;
     }
     this.actions.push(action);
+    this.lastPushed = this.actions.length - 1;
   }
 }
 

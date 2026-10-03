@@ -1,6 +1,6 @@
 {
   "schemaVersion": "trace-1",
-  "createdAt": "2026-10-03T17:52:22.869Z",
+  "createdAt": "2026-10-03T22:32:46.713Z",
   "payload": {
     "actions": [
       {
@@ -10,7 +10,8 @@
           "role": "button",
           "name": "Accept terms",
           "testId": "accept-button"
-        }
+        },
+        "quiet": true
       },
       {
         "name": "tap",

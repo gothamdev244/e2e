@@ -169,6 +169,13 @@ describe('relocateRecorded', () => {
       id: 'a',
       fallback: 'test-id',
     });
+    // A case change folds to one shape but carries no tally: a change to heal.
+    const save: TraceTargetDescriptor = { role: 'button', name: 'Save', testId: 'save' };
+    expect(relocateRecorded(save, redactedNodes([node('a', { role: 'button', name: 'SAVE', testId: 'save' })]))).toEqual({
+      kind: 'found',
+      id: 'a',
+      fallback: 'test-id',
+    });
   });
 
   it('never moves onto a neighbour whose number names it', () => {
@@ -203,6 +210,7 @@ describe('sameLabelShape', () => {
   it('folds a count governing a noun and a relative time, singular and plural alike', () => {
     expect(sameLabelShape('Reply (0 replies)', 'Reply (1 reply)')).toBe(true);
     expect(sameLabelShape('3 matches', '1 match')).toBe(true);
+    expect(sameLabelShape('1 class', '2 classes')).toBe(true);
     expect(sameLabelShape('Bob · now', 'Bob · 5m')).toBe(true);
     expect(sameLabelShape('Updated yesterday', 'Updated today')).toBe(true);
   });

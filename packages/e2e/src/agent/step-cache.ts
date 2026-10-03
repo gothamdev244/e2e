@@ -172,6 +172,8 @@ export class StepTraceSession {
    * run would otherwise rewrite the entry on every run.
    */
   private replayDrifted = false;
+  /** The action names of the entry the step replayed, to line the replay's own recording up with it. */
+  private replayedNames: readonly string[] = [];
   /** True once a cached entry's actions were run this step, fully or partly. */
   private consumedReplay = false;
   /** True once the store returned an entry for this step, whether or not it replayed. */
@@ -211,6 +213,16 @@ export class StepTraceSession {
   /** Records one committed grammar action into the step trace. */
   record(action: RecordableAction): void {
     this.recorder?.record(action);
+  }
+
+  /** Notes that the action just recorded armed a change wait (`TraceRecorder.armedChange`). */
+  armedChange(): void {
+    this.recorder?.armedChange();
+  }
+
+  /** Notes whether the screen changed within the awaiting action's change wait (`TraceRecorder.noteSettled`). */
+  noteSettled(changed: boolean): void {
+    this.recorder?.noteSettled(changed);
   }
 
   /** Records one mutating project-tool call as a replay-ending gap. */
@@ -347,11 +359,13 @@ export class StepTraceSession {
         if (this.repairedAfterEndMismatch(recorder)) await this.evict();
         else if (this.replayedWhole) {
           if (this.replayDrifted && (await this.stage(recorder, recordedVerdictOf(verdictSummary ?? '')))) return;
+          const quiet = recorder.quietIndices(this.replayedNames);
           this.cache.staged.push({
             kind: 'keep',
             keyHash: this.keyHash,
             stepIndex: this.options.stepIndex,
             recordedFor: recordedProvenance(this.claim.step, this.options.redact),
+            ...(quiet.length === 0 ? {} : { quiet }),
           });
         } else if (!(await this.stage(recorder, verdictSummary)) && this.readEntryHit) await this.evict();
         return;
@@ -408,6 +422,7 @@ export class StepTraceSession {
   private async replayEntry(entry: TraceEntry): Promise<StepVerdict | undefined> {
     const start = await this.captureStart('replay-start');
     const trace = entry.payload;
+    this.replayedNames = trace.actions.map((action) => action.name);
     if (!this.host.traceEligible) {
       this.info = this.missed('truncated', trace.actions.length);
       return undefined;
@@ -434,14 +449,24 @@ export class StepTraceSession {
         screens.push(screen);
         return screen;
       },
-      actions: host.actions,
+      // Marked consumed the moment a recorded action is dispatched, before it
+      // settles: a step timeout or other hard stop thrown from inside the
+      // replay after that implicates the entry, one thrown while it only
+      // looked does not.
+      actions: new Proxy(host.actions, {
+        get: (target, key, receiver) => {
+          const value: unknown = Reflect.get(target, key, receiver);
+          if (typeof value !== 'function') return value;
+          return (...args: unknown[]): unknown => {
+            this.consumedReplay = true;
+            return (value as (...args: unknown[]) => unknown).apply(target, args);
+          };
+        },
+      }),
       signal: host.signal,
       remainingMs: () => host.remainingMs(),
+      ...(host.paceNext === undefined ? {} : { paceNext: (changeWaitMs: number) => host.paceNext?.(changeWaitMs) }),
     };
-    // Set before the replay runs: a step timeout or other hard stop thrown
-    // from inside it still ran some of its actions, and the failure that
-    // follows implicates the entry like any other.
-    this.consumedReplay = true;
     const outcome = await replayTrace(watched, trace, {
       ...(start?.kind === 'semantic' ? { initial: start } : {}),
       looksBeforeFree: () => !onEndRoute(screens.at(-1)),
