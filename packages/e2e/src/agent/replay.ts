@@ -374,7 +374,8 @@ export async function replayTrace(
             // a settled look of its own, as the live loop did between them.
             for (let index = 0; index < planned.times; index += 1) {
               if (index > 0) await host.observe('held-still');
-              await actions.scroll(planned.direction);
+              // A folded scroll is paced in full whatever its entry says.
+              await (planned.times > 1 ? host.actions : actions).scroll(planned.direction);
               repeated += 1;
             }
             break;

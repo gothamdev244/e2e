@@ -132,11 +132,15 @@ visible.
 ## Pacing
 
 A replay runs no model, so its speed is set by how long it waits for the
-app. Every action arms a change wait (`agent/settle-policy.ts`): the next
-settled look waits up to 2 s for the screen to leave the shape the action
-was resolved against, then for it to hold still. An action whose effect the
-tree never shows (a right-click that opens a native menu, a key that moves a
-caret, a tap that only arms the next control) waits the full 2 s every time.
+app. Most actions arm a change wait (`SETTLE_AFTER` in
+`agent/settle-policy.ts`): the next settled look waits for the screen to
+leave the shape the action was resolved against, up to 2 s after a tap,
+key, fill, or navigation and 500 ms after a scroll or a project tool, then
+reads the first capture after it (`after-change`, after a fill) or waits for
+it to hold still (`held-still`, after the rest). A secret fill arms none. An
+action whose effect the tree never shows (a right-click that opens a native
+menu, a key that moves a caret, a tap that only arms the next control) waits
+its whole change wait every time.
 
 The recording notes how each action settled. `ObservationFeed` reports
 whether any capture of a settled look left the shape the action was

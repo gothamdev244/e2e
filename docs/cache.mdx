@@ -350,9 +350,12 @@ message names that file; delete it once nothing replays it. A custom
 existed are covered once a `read-write` run replays or re-records them. A
 step never recorded (a new or edited instruction or params), a retry, a
 `gap`, and a `truncated` recording still run live. A replay that needed a
-[fallback](#fallbacks) passes, since it made no model call; `relocated` in
-the run summary names it, so a read-only CI run shows which entries to
-re-record. `REPLAY_STALE` exits 2 and is not retried, since a
+[fallback](#fallbacks) is not stale by itself: when it finishes and passes
+its end-state checks it passes with no model call, and when it fails an
+action or the end state it fails like any other replay. `relocated` in the
+run summary counts the steps that needed one; `step.cache.relocated` in the
+report names them. A step whose label only changed in a count or a time
+relocates on every run and needs no re-recording. `REPLAY_STALE` exits 2 and is not retried, since a
 retry never replays and would pass live. The entry stays where it is, even
 in `read-write` mode, so every strict run fails on it until it is re-recorded:
 run the test in `read-write` mode without the flag, and with `cache.strict`
