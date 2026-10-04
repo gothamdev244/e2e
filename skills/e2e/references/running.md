@@ -6,14 +6,14 @@
 npx e2e run [files...] [options]   # run tests
 npx e2e explore [goal] [options]   # explore toward a goal without a test file (topic explore)
 npx e2e list [files...] [options]  # print what run would select
-npx e2e init [directory] [--yes]   # scaffold a project, refresh the agent skill
+npx e2e init [directory] [--yes]   # scaffold a project, refresh the agent skill (installed fork only)
+npx e2e telemetry                  # this build: always disabled, nothing is sent
 npx e2e guide [topic]              # print this skill; topics: setup, writing-tests, agent,
                                    # running, explore, debugging, mcp, bug-bash
 npx e2e cache ls|clear|stats       # inspect or empty the replay cache
 npx e2e login|logout|models [provider]  # e2e/oauth subscription logins: openai,
                                    # github-copilot, opencode-console, spacexai
 npx e2e mcp [--target <name>]      # MCP server for a coding agent (topic mcp)
-npx e2e telemetry [disable|enable] # anonymous usage telemetry: status or switch
 ```
 
 `run` flags:

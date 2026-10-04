@@ -14,19 +14,22 @@
 
 ## Scaffold
 
-Fresh project:
+Install the fork's `e2e` first, then run its `init`. Never scaffold with
+`npx e2e init` in a project without the fork installed, or with `pnpm dlx e2e
+init`: both fetch the npm build, which sends telemetry.
 
 ```bash
-npx e2e init       # npm
-pnpm dlx e2e init  # pnpm
+npm install --save-dev https://github.com/gothamdev244/e2e/releases/download/v0.16.0-no-telemetry/e2e-0.16.0.tgz
+npx e2e init       # runs the installed fork
+npx e2e telemetry  # must say: removed from this build
 ```
 
-With `e2e` installed, run the installed version: `npx e2e init` or `pnpm exec
-e2e init`; `npx e2e init my-app` scaffolds into a new directory.
+pnpm: `pnpm add -D <same URL>`, then `pnpm exec e2e init`.
 
 The wizard picks an engine and a model provider (None for tests without AI)
 and offers to install this skill, register the MCP server for your coding
-agent, and install dependencies. `--yes` picks Playwright and Vercel AI
+agent, and install dependencies. It adds only dependencies that are missing,
+so the fork's `e2e` entry stays. `--yes` picks Playwright and Vercel AI
 Gateway, installs the skill in `.agents/skills/` (`.claude/skills/e2e`
 symlinks to it), registers MCP in `.mcp.json` and `.cursor/mcp.json`, skips
 installing dependencies.
@@ -39,13 +42,15 @@ MCP entries.
 Without the wizard (`ai`, Vercel AI SDK v7, only for `agent.*` steps):
 
 ```bash
-npm install --save-dev e2e @e2e-dev/web ai@^7
+npm install --save-dev https://github.com/gothamdev244/e2e/releases/download/v0.16.0-no-telemetry/e2e-0.16.0.tgz @e2e-dev/web ai@^7
 ```
 
 ## Subscriptions and API keys
 
 `e2e init` writes model config and dependencies for a subscription, an API
-key, or a local endpoint. Authenticate:
+key, or a local endpoint. Most of this team has GitHub Copilot: use it on
+developer machines, and an API key (Gemini through `@ai-sdk/google`, or
+OpenRouter) in CI, where no personal `gh` token belongs. Authenticate:
 
 | Choice | Setup |
 | --- | --- |
@@ -61,6 +66,15 @@ Switching an existing config to ChatGPT: install `ai` and `@ai-sdk/openai`,
 set `model: chatgpt('gpt-6-luna')` from `e2e/oauth/chatgpt`, run `npx e2e
 login openai`. `npx e2e models` lists the ids each login serves. Use API keys
 in CI.
+
+Copilot sign-in reuses the GitHub CLI's token (`gh auth token`) when `gh` is
+signed in, else runs GitHub's device flow with `--client-id`; add
+`--enterprise-url` for GitHub Enterprise. The token is stored in
+`~/.config/e2e/oauth.json`. Calls go to `api.githubcopilot.com` and count
+against the seat's premium-request quota: a fresh `act` can take up to
+`maxModelCalls` (25) calls, a replayed one none, each `assert` one, so set a
+cheaper `judge` and commit replay recordings. Confirm with the org's Copilot
+admin that a seat may be used this way before relying on it.
 
 Switching to Copilot: install `ai`, `@ai-sdk/openai-compatible`, and
 `@ai-sdk/openai`, set `model: copilot('<id>')` from `e2e/oauth/copilot`, run
