@@ -3,6 +3,14 @@ title: Telemetry
 description: What the CLI sends, what it never sends, and how to turn it off.
 ---
 
+<Warning>
+This is the `no-telemetry` fork. Telemetry and `e2e feedback` are removed at
+build time: the transport makes no request, `e2e telemetry` always reports
+`disabled (removed from this build; nothing is ever sent)`, and `enable`
+cannot turn it on. The rest of this page describes upstream behavior.
+</Warning>
+
+
 The `e2e` CLI sends anonymous usage data so we can see which commands,
 engines, and features are used and where runs fail. It is on by default.
 Telemetry includes counts and version information, but no test content, app

@@ -9,6 +9,7 @@ export type TelemetryAction = 'status' | 'enable' | 'disable';
 export const TELEMETRY_ACTIONS: readonly TelemetryAction[] = ['status', 'enable', 'disable'];
 
 const REASONS: Readonly<Record<TelemetryDisabledBy, string>> = {
+  build: 'removed from this build; nothing is ever sent',
   E2E_TELEMETRY_DISABLED: 'E2E_TELEMETRY_DISABLED is set',
   DO_NOT_TRACK: 'DO_NOT_TRACK is set',
   checkout: 'running from a source checkout of e2e',

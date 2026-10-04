@@ -42,7 +42,7 @@ export const NOTICE_VERSION = 3;
 /** The longest a flush may hold the process; the project lookup and the request share it. */
 const DEFAULT_FLUSH_MS = 2_000;
 
-export type TelemetryDisabledBy = 'E2E_TELEMETRY_DISABLED' | 'DO_NOT_TRACK' | 'checkout' | 'preference' | 'store';
+export type TelemetryDisabledBy = 'build' | 'E2E_TELEMETRY_DISABLED' | 'DO_NOT_TRACK' | 'checkout' | 'preference' | 'store';
 
 export interface TelemetryOptions {
   /** The e2e version, sent with every event. */
@@ -124,13 +124,7 @@ export class Telemetry {
 
   /** Why telemetry is off, or undefined when it is on. */
   get disabledBy(): TelemetryDisabledBy | undefined {
-    if (envFlag(this.env, 'E2E_TELEMETRY_DISABLED')) return 'E2E_TELEMETRY_DISABLED';
-    if (envFlag(this.env, 'DO_NOT_TRACK')) return 'DO_NOT_TRACK';
-    if (this.checkout) return 'checkout';
-    if (this.statedId !== undefined) return undefined;
-    const store: TelemetryStore | undefined = this.store();
-    if (store === undefined) return 'store';
-    return store.enabled ? undefined : 'preference';
+    return 'build';
   }
 
   get enabled(): boolean {

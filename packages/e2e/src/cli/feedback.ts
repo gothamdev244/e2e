@@ -18,7 +18,7 @@ import { createRedactor } from '../internal/redact.ts';
 import { MIN_SECRET_LENGTH, secretLength } from '../config/secrets.ts';
 import { collectEnvironment } from '../telemetry/environment.ts';
 import { postBatch, type PostHogEvent } from '../telemetry/posthog.ts';
-import type { Telemetry, TelemetryDisabledBy } from '../telemetry/telemetry.ts';
+import type { Telemetry } from '../telemetry/telemetry.ts';
 
 export const FEEDBACK_TYPES = ['bug', 'docs', 'feature', 'other'] as const;
 export type FeedbackType = (typeof FEEDBACK_TYPES)[number];
@@ -114,14 +114,10 @@ function feedbackEvent(report: FeedbackReport, options: FeedbackOptions, env: No
   };
 }
 
-/** The variables that switch feedback off along with telemetry. */
-const BLOCKING: ReadonlySet<TelemetryDisabledBy> = new Set(['E2E_TELEMETRY_DISABLED', 'DO_NOT_TRACK']);
-
 /**
- * Sends the report, or prints it under `--dry-run` or `E2E_TELEMETRY_DEBUG`.
- * Exit 0 when PostHog accepted it, 2 when an opt-out variable forbids
- * sending, 3 when PostHog did not confirm it: a timeout can follow delivery,
- * so the message names the reference and never claims nothing arrived.
+ * Prints the report under `--dry-run` or `E2E_TELEMETRY_DEBUG`, exit 0.
+ * Otherwise sends nothing: this build has no transport, so it exits 2 and
+ * points at the issue tracker.
  */
 export async function feedback(report: FeedbackReport, options: FeedbackOptions): Promise<number> {
   const env = options.env ?? process.env;
@@ -130,9 +126,8 @@ export async function feedback(report: FeedbackReport, options: FeedbackOptions)
     process.stdout.write(`${JSON.stringify(event, null, 2)}\n`);
     return 0;
   }
-  const disabledBy = options.telemetry.disabledBy;
-  if (disabledBy !== undefined && BLOCKING.has(disabledBy)) {
-    process.stderr.write(`feedback not sent: ${disabledBy} is set, which switches off everything e2e sends. Unset it for this command to send the report.\n`);
+  if (options.telemetry.disabledBy === 'build') {
+    process.stderr.write(`feedback not sent: this build of e2e never sends anything. Open an issue instead: ${ISSUES_URL}\n`);
     return 2;
   }
   const sent = await postBatch([event], { signal: AbortSignal.timeout(SEND_TIMEOUT_MS), fetch: options.fetch ?? fetch });

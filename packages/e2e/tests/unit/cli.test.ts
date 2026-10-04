@@ -5,7 +5,7 @@ import { stripVTControlCharacters } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ListOptions, ListedPair, RunOptions } from '../../src/run/runner.ts';
 import { ConfigurationError } from '../../src/internal/errors.ts';
-import { SAMPLE_REPORT_SECRETS, sampleReport } from '../helpers/sample-report.ts';
+import { sampleReport } from '../helpers/sample-report.ts';
 
 const runMock = vi.hoisted(() => vi.fn());
 const listMock = vi.hoisted(() => vi.fn());
@@ -765,55 +765,20 @@ describe('e2e feedback', () => {
     rmSync(configHome, { recursive: true, force: true });
   });
 
-  it('sends one event with the report, the machine facts, and the telemetry id', async () => {
-    await invoke('feedback', '--type', 'bug', '-m', ' list ignores --grep ', '--command', 'e2e list --grep x');
-    expect(process.exitCode).toBe(0);
-    expect(String(fetchMock.mock.calls[0]?.[0])).toBe('https://eu.i.posthog.com/batch/');
-    const [event] = sentFeedback();
-    expect(event?.properties).toMatchObject({
-      type: 'bug',
-      message: 'list ignores --grep',
-      command: 'e2e list --grep x',
-      task: null,
-      e2e_version: packageVersion,
-      $process_person_profile: false,
-      $geoip_disable: true,
-    });
-    const { anonymousId } = JSON.parse(readFileSync(path.join(configHome, 'e2e', 'telemetry.json'), 'utf8')) as { anonymousId: string };
-    expect(event?.properties['distinct_id']).toBe(anonymousId);
-    expect(written(stdoutSpy)).toBe(`Feedback sent to the e2e team, thank you. Reference: ${event?.uuid}\n`);
-  });
-
-  it('still sends after e2e telemetry disable, under an id of its own', async () => {
-    await invoke('telemetry', 'disable');
-    stdoutSpy.mockClear();
-    await invoke('feedback', '-m', 'broken');
-    expect(process.exitCode).toBe(0);
-    const [event] = sentFeedback();
-    expect(event?.properties['distinct_id']).toBe(`feedback:${event?.uuid}`);
-  });
-
   it.each(['E2E_TELEMETRY_DISABLED', 'DO_NOT_TRACK'])('sends nothing and exits 2 when %s is set', async (variable) => {
     vi.stubEnv(variable, '1');
     await invoke('feedback', '-m', 'broken');
     expect(process.exitCode).toBe(2);
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(written(stderrSpy)).toContain(`feedback not sent: ${variable} is set`);
+    expect(written(stderrSpy)).toContain('feedback not sent: this build of e2e never sends anything.');
   });
 
-  it('redacts secret-named variables and token shapes, and leaves prose alone', async () => {
-    vi.stubEnv('MY_SERVICE_TOKEN', 'hunter2-hunter2');
-    vi.stubEnv('TEST_USER_PASS', 'hunter22');
-    await invoke(
-      'feedback',
-      '-m', 'login with hunter22 failed with hunter2-hunter2',
-      '--actual', 'Authorization: Bearer abc123defghijklmnop sk-ant-api03-abcdefghijklmnopqrst https://user:pw@example.com/x',
-      '--task', 'following the Basic authentication example',
-    );
-    const [event] = sentFeedback();
-    expect(event?.properties['message']).toBe('login with <secret:TEST_USER_PASS> failed with <secret:MY_SERVICE_TOKEN>');
-    expect(event?.properties['actual']).toBe('Authorization: Bearer <redacted> <redacted> https://<redacted>@example.com/x');
-    expect(event?.properties['task']).toBe('following the Basic authentication example');
+  it('sends nothing and exits 2: this build never sends a report, whatever the environment says', async () => {
+    await invoke('telemetry', 'enable');
+    await invoke('feedback', '--type', 'bug', '-m', 'broken');
+    expect(process.exitCode).toBe(2);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(written(stderrSpy)).toContain('feedback not sent: this build of e2e never sends anything.');
   });
 
   it('prints the event and sends nothing with --dry-run, even where sending is off', async () => {
@@ -824,14 +789,6 @@ describe('e2e feedback', () => {
     const printed = JSON.parse(written(stdoutSpy)) as SentEvent;
     expect(printed.event).toBe('e2e_feedback');
     expect(printed.properties).toMatchObject({ type: 'docs', message: 'unclear' });
-  });
-
-  it('exits 3 and names the unconfirmed report when PostHog does not accept it', async () => {
-    fetchMock.mockResolvedValue(new Response('', { status: 503 }));
-    await invoke('feedback', '-m', 'broken');
-    expect(process.exitCode).toBe(3);
-    const [event] = sentFeedback();
-    expect(written(stderrSpy)).toContain(`feedback not confirmed: PostHog did not acknowledge report ${event?.uuid}, so it may not have arrived.`);
   });
 
   it('counts the length limit in characters, not UTF-16 units', async () => {
@@ -876,137 +833,26 @@ describe('e2e telemetry', () => {
     rmSync(configHome, { recursive: true, force: true });
   });
 
-  it('reports enabled by default and points at the docs', async () => {
+  it('reports disabled by the build, and enable cannot turn it on', async () => {
+    await invoke('telemetry', 'enable');
     await invoke('telemetry');
-    const out = written(stdoutSpy);
-    expect(out).toContain('Status: enabled\n');
-    expect(out).toContain('Details: https://e2e.tester.army/docs/telemetry\n');
+    expect(written(stdoutSpy)).toContain('Status: disabled (removed from this build; nothing is ever sent)\n');
+    expect(written(stdoutSpy)).not.toContain('Status: enabled');
     expect(process.exitCode).toBe(0);
   });
 
-  it('disable saves the choice, status names it, and enable restores it', async () => {
-    const file = path.join(configHome, 'e2e', 'telemetry.json');
-    await invoke('telemetry', 'disable');
-    expect(written(stdoutSpy)).toContain(`telemetry disabled; saved to ${file}\n`);
-    expect(written(stdoutSpy)).toContain('Status: disabled (switched off with e2e telemetry disable)\n');
-    expect(written(stdoutSpy)).toContain('No usage data is sent from this machine.\n');
-    expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({ enabled: false });
-    expect(process.exitCode).toBe(0);
-
-    stdoutSpy.mockClear();
-    await invoke('telemetry');
-    expect(written(stdoutSpy)).toContain('Status: disabled (switched off with e2e telemetry disable)\n');
-
-    stdoutSpy.mockClear();
-    await invoke('telemetry', 'enable');
-    expect(written(stdoutSpy)).toContain(`telemetry enabled; saved to ${file}\n`);
-    expect(written(stdoutSpy)).toContain('Status: enabled\n');
-    expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({ enabled: true });
-  });
-
-  it('an environment opt-out wins over the saved choice', async () => {
-    process.env['E2E_TELEMETRY_DISABLED'] = '1';
-    await invoke('telemetry', 'enable');
-    expect(written(stdoutSpy)).toContain('Status: disabled (E2E_TELEMETRY_DISABLED is set)\n');
+  it('prints no notice and records no event for any command, even in debug mode', async () => {
+    await invoke('list');
+    await invoke('list', '--tag', 'smoke');
+    await invoke('--version');
+    expect(written(stderrSpy)).not.toContain('e2e collects anonymous usage telemetry');
     expect(printedEvents()).toEqual([]);
-    expect(process.exitCode).toBe(0);
   });
 
   it('rejects an unknown action with exit code 2', async () => {
     await invoke('telemetry', 'nope');
     expect(process.exitCode).toBe(2);
     expect(written(stderrSpy)).toContain('Allowed choices are status, enable, disable');
-  });
-
-  it('prints the notice once before the first command and a session event per command', async () => {
-    await invoke('list');
-    await invoke('list', '--tag', 'smoke');
-    const notices = written(stderrSpy).split('e2e collects anonymous usage telemetry').length - 1;
-    expect(notices).toBe(1);
-    expect(written(stderrSpy)).toContain('e2e telemetry disable');
-    const events = printedEvents();
-    expect(events.map((event) => event.event)).toEqual(['e2e_cli_session', 'e2e_cli_session']);
-    expect(events[0]!.properties['command']).toBe('list');
-    expect(events[0]!.properties['flags']).toEqual([]);
-    expect(events[1]!.properties['flags']).toEqual(['--tag']);
-    expect(JSON.stringify(events)).not.toContain('smoke');
-    expect(events[0]!.properties['$lib']).toBe('e2e');
-    expect(events[0]!.properties['distinct_id']).toMatch(/^[a-f0-9]{32}$/u);
-  });
-
-  it('does not print the notice before e2e telemetry itself', async () => {
-    await invoke('telemetry');
-    expect(written(stderrSpy)).not.toContain('e2e collects anonymous usage telemetry');
-    expect(printedEvents().map((event) => event.properties['command'])).toEqual(['telemetry']);
-  });
-
-  it('does not print the notice before e2e init, and still prints it before the next command', async () => {
-    await invoke('init', '--yes');
-    expect(written(stderrSpy)).not.toContain('e2e collects anonymous usage telemetry');
-    expect(printedEvents().filter((event) => event.event === 'e2e_cli_session').map((event) => event.properties['command'])).toEqual(['init']);
-    await invoke('list');
-    expect(written(stderrSpy)).toContain('e2e collects anonymous usage telemetry');
-  });
-
-  it('records the run event from the report the run returned, with the flag names only', async () => {
-    runMock.mockResolvedValue({ exitCode: 1, report: sampleReport() });
-    await invoke('run', '--workers', '3', '--headed', 'tests/secret.e2e.ts');
-    const events = printedEvents();
-    expect(events.map((event) => event.event)).toEqual(['e2e_cli_session', 'e2e_run_completed']);
-    const run = events[1]!;
-    expect(run.properties['flags']).toEqual(['--headed', '--workers']);
-    expect(run.properties['status']).toBe('failed');
-    expect(run.properties['tests_executed']).toBe(2);
-    expect(run.properties['engines']).toEqual(['homegrown@9.9.9', 'playwright@0.6.1']);
-    const payload = JSON.stringify(run);
-    for (const secret of SAMPLE_REPORT_SECRETS) expect(payload).not.toContain(secret);
-    expect(payload).not.toContain('"3"');
-    expect(process.exitCode).toBe(1);
-  });
-
-  it('ends the session event with the exit code, and the failure code when the command threw', async () => {
-    await invoke('list');
-    const [listed] = printedEvents();
-    expect(listed!.properties['exit_code']).toBe(0);
-    expect(listed!.properties['error_code']).toBeNull();
-    expect(typeof listed!.properties['duration_ms']).toBe('number');
-
-    stderrSpy.mockClear();
-    runMock.mockRejectedValue(new ConfigurationError('CONFIG_NOT_FOUND', 'no e2e.config.ts in /secret/place'));
-    await invoke('run');
-    const [failed] = printedEvents();
-    expect(failed!.event).toBe('e2e_cli_session');
-    expect(failed!.properties['exit_code']).toBe(2);
-    expect(failed!.properties['error_code']).toBe('CONFIG_NOT_FOUND');
-    expect(JSON.stringify(failed)).not.toContain('secret');
-    expect(process.exitCode).toBe(2);
-
-    stderrSpy.mockClear();
-    runMock.mockResolvedValue({ exitCode: 1, report: sampleReport() });
-    await invoke('run');
-    const [session, run] = printedEvents();
-    expect(session!.properties['exit_code']).toBe(1);
-    expect(session!.properties['error_code']).toBeNull();
-    expect(run!.properties).not.toHaveProperty('error_code');
-  });
-
-  it('names a usage error commander rejected, as a session of the command it was aimed at', async () => {
-    await invoke('run', '--workers', 'many');
-    const events = printedEvents();
-    expect(events).toHaveLength(1);
-    expect(events[0]!.properties['command']).toBe('run');
-    expect(events[0]!.properties['flags']).toEqual([]);
-    expect(events[0]!.properties['exit_code']).toBe(2);
-    expect(events[0]!.properties['error_code']).toBe('CLI_USAGE');
-    expect(JSON.stringify(events)).not.toContain('many');
-    expect(process.exitCode).toBe(2);
-    expect(runMock).not.toHaveBeenCalled();
-
-    stderrSpy.mockClear();
-    await invoke('cache', 'ls', '--nope');
-    const [nested] = printedEvents();
-    expect(nested!.properties['command']).toBe('cache ls');
-    expect(nested!.properties['error_code']).toBe('CLI_USAGE');
   });
 
   it('records no session for --help, help <command>, or --version', async () => {
@@ -1024,15 +870,6 @@ describe('e2e telemetry', () => {
     }
     expect(printedEvents()).toEqual([]);
     expect(runMock).not.toHaveBeenCalled();
-  });
-
-  it('records the init event from the outcome init returns', async () => {
-    initMock.mockResolvedValue(initOutcome(0, { result: 'cancelled', engine: 'agent-device' }));
-    await invoke('init', 'apps/secret-app');
-    const events = printedEvents();
-    expect(events.map((event) => event.event)).toEqual(['e2e_cli_session', 'e2e_init_completed']);
-    expect(events[1]!.properties).toMatchObject({ result: 'cancelled', engine: 'agent-device', gateway: null, skill: false });
-    expect(JSON.stringify(events)).not.toContain('secret-app');
   });
 
   it('is listed in the help with its actions', async () => {

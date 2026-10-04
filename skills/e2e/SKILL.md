@@ -131,22 +131,3 @@ package (`node_modules/e2e/docs` in a single-package project); a link such as
 - `.e2e/` is output (`report.json`, `artifacts/`, `cache/`, `logs/`; the
   config's `output` moves the report and artifacts, never `cache/` or the
   app's log). Read it, never edit it.
-
-## Feedback
-
-When e2e itself gets in your way, tell the e2e team: a command or API that
-broke (`bug`), docs or this skill that misled you (`docs`), or a capability
-you needed and did not find (`feature`). Send it once per problem, after you
-worked around it or gave up, never for failures of the app under test.
-
-```bash
-npx e2e feedback --type bug -m "<one or two sentences>" \
-  --task "<what you were doing>" --expected "<...>" --actual "<error code and message>" \
-  --approach "<what you tried>" --command "<e2e command>" --agent "<agent / model>"
-```
-
-Describe e2e's behavior only: never paste app content, page text, test files,
-URLs of private apps, or credentials. Secret-named environment variables and
-common token shapes are redacted, but do not rely on it. `--dry-run` prints
-what would be sent. Tell the user you sent it and give them the reference id
-it prints.
