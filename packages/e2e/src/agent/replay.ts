@@ -132,12 +132,6 @@ export interface ReplayOutcome {
    * (`relocateRecorded`); absent when every one matched exactly.
    */
   readonly relocated?: number;
-  /**
-   * True when some fallback match drifted beyond a tally or a time in its
-   * label (`FoundTarget.transient`): the recording is stale, and a step it
-   * still finished re-records.
-   */
-  readonly stale?: true;
 }
 
 /** The list a recorded scroll moved, and the share of the viewport it covered. */
@@ -307,11 +301,7 @@ export async function replayTrace(
   const summaries: string[] = [];
   const total = trace.actions.length;
   let relocated = 0;
-  let stale = false;
-  const drift = (): Pick<ReplayOutcome, 'relocated' | 'stale'> => ({
-    ...(relocated === 0 ? {} : { relocated }),
-    ...(stale ? { stale } : {}),
-  });
+  const drift = (): Pick<ReplayOutcome, 'relocated'> => (relocated === 0 ? {} : { relocated });
   const stop = (stopReason: ReplayHandOffReason, partial?: string): ReplayOutcome => {
     if (partial !== undefined) summaries.push(partial);
     return { completed: false, executed: summaries.length, total, summaries, stopReason, ...drift() };
@@ -343,11 +333,8 @@ export async function replayTrace(
     // Whether this action's control was found only by a fallback rung,
     // counted once the action ran.
     let fellBack = false;
-    let staleTarget = false;
     const note = (found: FoundTarget): void => {
-      if (found.fallback === undefined) return;
-      fellBack = true;
-      if (found.transient !== true) staleTarget = true;
+      if (found.fallback !== undefined) fellBack = true;
     };
     const refind = async (descriptor: TraceTargetDescriptor, from: Look): Promise<Relocated> => {
       const result = await relocate(host, descriptor, from);
@@ -436,7 +423,6 @@ export async function replayTrace(
     }
     summaries.push(action.summary);
     if (fellBack) relocated += 1;
-    if (staleTarget) stale = true;
     previous = action;
   }
   return { completed: true, executed: summaries.length, total, summaries, ...drift() };

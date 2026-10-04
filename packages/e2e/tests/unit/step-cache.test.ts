@@ -879,27 +879,6 @@ describe('StepTraceSession', () => {
     expect(healed.endAnchors).toEqual([savedAnchor]);
   });
 
-  it('keeps an entry whose replay drifted only in a tally in a label, which moves again every run', async () => {
-    const liked: SemanticNode = { ref: { id: 'l', revision: 'r1' }, role: 'button', name: 'Like (3 likes)' };
-    const context = entryContext({
-      actions: [{ name: 'tap', summary: 'tap button "Like (0 likes)"', target: { role: 'button', name: 'Like (0 likes)' } }],
-      startPath: '/post',
-      endPath: '/post',
-      endAnchors: [savedAnchor],
-    });
-    let session: StepTraceSession | undefined;
-    const host = makeHost(['/post', '/post', '/post', '/post', '/post'], [[liked], [liked], [liked, savedMarker]]);
-    session = makeSession(context, {
-      ...host,
-      remainingMs: () => 60_000,
-      actions: { tap: async () => session?.record({ name: 'tap', node: redacted(liked) }) } as unknown as ExecutorActions,
-    });
-    const verdict = await session.begin();
-    expect(session.cacheInfo).toEqual({ mode: 'self-finalized', replayedActions: 1, totalActions: 1, relocated: 1 });
-    await session.conclude('passed', verdict?.summary);
-    expect(context.staged).toEqual([{ kind: 'keep', keyHash: 'a'.repeat(64), stepIndex: 1, recordedFor: exampleStep }]);
-  });
-
   it('keeps a drifted entry when the passing screen cannot be captured to re-record it', async () => {
     const relabeled: SemanticNode = { ref: { id: 'u', revision: 'r1' }, role: 'button', name: 'Upgrade now', testId: 'upgrade' };
     const context = entryContext({

@@ -315,7 +315,7 @@ describe('replayTrace', () => {
       host,
       trace([{ name: 'drag', summary: 'drag', target: { role: 'button', name: 'Upgrade', testId: 'upgrade' }, destination: { role: 'textbox', name: 'Email' } }]),
     );
-    expect(outcome).toMatchObject({ completed: true, executed: 1, relocated: 1, stale: true });
+    expect(outcome).toMatchObject({ completed: true, executed: 1, relocated: 1 });
     expect(host.looks).toEqual(['held-still', 'raw']);
   });
 

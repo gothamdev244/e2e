@@ -24,7 +24,6 @@
 
 import type { RedactedNode } from '../agent/observation.ts';
 import { containerKey, describeTarget, parentsOf } from '../agent/actions.ts';
-import { carriesState, sameLabelShape } from './label-shape.ts';
 import type { TracePosition, TraceTargetDescriptor } from './trace.ts';
 
 /**
@@ -51,10 +50,9 @@ export type RelocationFailure = 'target-not-found' | 'target-ambiguous';
  * text, or role changed; `accessible`, its role and accessible name while
  * its test id, placeholder, or text changed; `role-family`, its accessible
  * name on a control of the same kind under another role (a link that became
- * a button); `label-shape`, its role and the shape of its label once a tally
- * or a time in it moved (`Like (0 likes)` to `Like (1 like)`).
+ * a button).
  */
-export type RelocationFallback = 'test-id' | 'accessible' | 'role-family' | 'label-shape';
+export type RelocationFallback = 'test-id' | 'accessible' | 'role-family';
 
 export type RelocationResult =
   | {
@@ -62,12 +60,6 @@ export type RelocationResult =
       readonly id: string;
       /** Set when only a fallback rung found the node: the recording drifted from the app. */
       readonly fallback?: RelocationFallback;
-      /**
-       * Set with `fallback` when the only drift is a tally or a time in the
-       * label (`sameLabelShape`), which moves again on the next run: the
-       * recording is no staler than it will ever be, so nothing re-records it.
-       */
-      readonly transient?: true;
     }
   | { readonly kind: 'failed'; readonly failure: 'target-not-found' }
   /** Several nodes share the matched identity; a caller with other evidence (a recorded point) may still tell them apart. */
@@ -272,26 +264,7 @@ export function relocateRecorded(
     const inOrder = candidates.filter((candidate) => disagreeing.includes(candidate.id)).map((candidate) => candidate.id);
     return { kind: 'failed', failure: 'target-ambiguous', candidates: inOrder, conflict: true };
   }
-  const live = candidates.find((candidate) => candidate.id === winner.id)!.descriptor;
-  return { kind: 'found', id: winner.id, fallback: winner.fallback, ...(labelDriftOnly(descriptor, live) ? { transient: true as const } : {}) };
-}
-
-/**
- * Whether a recorded target and the live node differ only in a tally or a
- * time in their label: every other identity field equal, and the name and
- * the text each equal, or of one shape (`sameLabelShape`) with a tally or a
- * time in it. A label that changed only in case is a change to heal.
- */
-function labelDriftOnly(recorded: TraceTargetDescriptor, live: TraceTargetDescriptor): boolean {
-  const label = (field: 'name' | 'text') => {
-    const was = recorded[field];
-    const now = live[field];
-    return (
-      was === now ||
-      (was !== undefined && now !== undefined && carriesState(was) && was.toLowerCase() !== now.toLowerCase() && sameLabelShape(was, now))
-    );
-  };
-  return fieldsIdentical(recorded, live, ['role', 'testId', 'placeholder', 'inputPurpose']) && label('name') && label('text');
+  return { kind: 'found', id: winner.id, fallback: winner.fallback };
 }
 
 /**
@@ -339,10 +312,8 @@ const ROLE_FAMILIES: readonly ReadonlySet<string>[] = [
  * The fallback rungs for one recorded descriptor, most stable first. A test
  * id is the app's own name for a control and outlives copy changes, so it
  * leads: with the role, then alone. The accessible name follows: the role
- * and name alone (a test id, placeholder, or text that changed), the name
- * across a role family, then the role and the shape of the label the
- * control is named by, its name, else its text (`label-shape.ts`). Each rung
- * is evidence of one kind; the first match of each kind is compared with the
+ * and name alone (a test id, placeholder, or text that changed), then the
+ * name across a role family. Each rung is evidence of one kind; the first match of each kind is compared with the
  * other's (`relocateRecorded`). None for an anonymous descriptor, whose
  * place among its twins is all it has.
  */
@@ -366,18 +337,6 @@ function fallbackRungs(descriptor: TraceTargetDescriptor): readonly FallbackRung
         matches: (candidate) => candidate.name === name && candidate.role !== undefined && family.has(candidate.role),
       });
     }
-  }
-  const label = name ?? descriptor.text;
-  if (label !== undefined && role !== undefined) {
-    const named = name !== undefined;
-    rungs.push({
-      fallback: 'label-shape',
-      evidence: 'name',
-      matches: (candidate) => {
-        const live = named ? candidate.name : candidate.name === undefined ? candidate.text : undefined;
-        return candidate.role === role && live !== undefined && sameLabelShape(label, live);
-      },
-    });
   }
   return rungs;
 }

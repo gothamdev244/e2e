@@ -26,7 +26,6 @@
 import type { RedactedNode } from '../agent/observation.ts';
 import { describeTarget } from '../agent/actions.ts';
 import { collapseText } from '../internal/text.ts';
-import { AGE_PATTERNS } from './label-shape.ts';
 import { descriptorTiers, fieldsEqual, type DescriptorField } from './relocate.ts';
 import {
   bound,
@@ -151,7 +150,9 @@ function deltaSide(
  */
 const VOLATILE_TEXT: readonly RegExp[] = [
   /\b(?=[A-Za-z0-9_-]*\d)(?=[A-Za-z0-9_-]*[A-Za-z])[A-Za-z0-9_-]{12,}\b/,
-  ...AGE_PATTERNS,
+  // A spelled unit in any case; a one-letter unit lower case only, since `3 M` is a size.
+  /\b\d+\s*(?:secs?|seconds?|mins?|minutes?|hrs?|hours?|days?|weeks?|months?|years?)\b/i,
+  /\b\d+\s*(?:ms|[smhdwy]|mo)\b/,
   /\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(?:,?\s+\d{4})?\b/i,
   /\b\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?(?:\s+\d{4})?\b/i,
   /\b\d{4}-\d{2}-\d{2}\b/,

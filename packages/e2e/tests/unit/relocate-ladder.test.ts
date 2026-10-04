@@ -3,7 +3,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SemanticNode } from '../../src/engine/surface.ts';
 import { redactedNodes } from '../helpers/redacted.ts';
-import { sameLabelShape } from '../../src/cache/label-shape.ts';
 import { relocateDescriptor, relocateRecorded } from '../../src/cache/relocate.ts';
 import type { TraceTargetDescriptor } from '../../src/cache/trace.ts';
 
@@ -139,45 +138,14 @@ describe('relocateRecorded', () => {
     expect(relocateRecorded(recorded, nodes)).toEqual({ kind: 'failed', failure: 'target-not-found' });
   });
 
-  it('follows a label whose tally or time moved, by its shape, as the last rung', () => {
-    const recorded: TraceTargetDescriptor = { role: 'button', name: 'Like (0 likes)' };
-    expect(relocateRecorded(recorded, redactedNodes([node('a', { role: 'button', name: 'Like (1 like)' })]))).toEqual({
-      kind: 'found',
-      id: 'a',
-      fallback: 'label-shape',
-      transient: true,
+  it('reads a label whose count or time moved as another label, unless a test id still names the control', () => {
+    const likes: TraceTargetDescriptor = { role: 'button', name: 'Like (0 likes)' };
+    expect(relocateRecorded(likes, redactedNodes([node('a', { role: 'button', name: 'Like (1 like)' })]))).toEqual({
+      kind: 'failed',
+      failure: 'target-not-found',
     });
-    const row: TraceTargetDescriptor = { role: 'link', text: 'Bob · 2m' };
-    expect(relocateRecorded(row, redactedNodes([node('a', { role: 'link', text: 'Bob · now' })]))).toEqual({
-      kind: 'found',
-      id: 'a',
-      fallback: 'label-shape',
-      transient: true,
-    });
-  });
-
-  it('marks a test id match transient when only a tally in its label moved, and stale when the label changed', () => {
     const inbox: TraceTargetDescriptor = { role: 'link', name: 'Inbox (3 messages)', testId: 'inbox' };
     expect(relocateRecorded(inbox, redactedNodes([node('a', { role: 'link', name: 'Inbox (4 messages)', testId: 'inbox' })]))).toEqual({
-      kind: 'found',
-      id: 'a',
-      fallback: 'test-id',
-      transient: true,
-    });
-    expect(relocateRecorded(inbox, redactedNodes([node('a', { role: 'link', name: 'Mail', testId: 'inbox' })]))).toEqual({
-      kind: 'found',
-      id: 'a',
-      fallback: 'test-id',
-    });
-    // A case change on a label that carries a tally is a change to heal too.
-    expect(relocateRecorded(inbox, redactedNodes([node('a', { role: 'link', name: 'INBOX (3 messages)', testId: 'inbox' })]))).toEqual({
-      kind: 'found',
-      id: 'a',
-      fallback: 'test-id',
-    });
-    // A case change folds to one shape but carries no tally: a change to heal.
-    const save: TraceTargetDescriptor = { role: 'button', name: 'Save', testId: 'save' };
-    expect(relocateRecorded(save, redactedNodes([node('a', { role: 'button', name: 'SAVE', testId: 'save' })]))).toEqual({
       kind: 'found',
       id: 'a',
       fallback: 'test-id',
@@ -209,26 +177,5 @@ describe('relocateRecorded', () => {
       failure: 'target-ambiguous',
       candidates: ['a'],
     });
-  });
-});
-
-describe('sameLabelShape', () => {
-  it('folds a count governing a noun and a relative time, singular and plural alike', () => {
-    expect(sameLabelShape('Reply (0 replies)', 'Reply (1 reply)')).toBe(true);
-    expect(sameLabelShape('3 matches', '1 match')).toBe(true);
-    expect(sameLabelShape('1 class', '2 classes')).toBe(true);
-    expect(sameLabelShape('Bob · now', 'Bob · 5m')).toBe(true);
-    expect(sameLabelShape('Updated yesterday', 'Updated today')).toBe(true);
-  });
-
-  it('keeps a number that names, a size, and the adverb now', () => {
-    expect(sameLabelShape('Delete item 3', 'Delete item 4')).toBe(false);
-    expect(sameLabelShape('Size 3 M', 'Size 5 M')).toBe(false);
-    expect(sameLabelShape('Buy now', 'Buy today')).toBe(false);
-  });
-
-  it('compares a label that is nothing but a time as it reads', () => {
-    expect(sameLabelShape('2m', '2m')).toBe(true);
-    expect(sameLabelShape('2m', 'now')).toBe(false);
   });
 });

@@ -89,10 +89,6 @@ order and takes the first that finds exactly one control:
 3. The role and accessible name: the test id or a placeholder changed.
 4. The accessible name across one kind of control: a link restyled as a
    button, a checkbox redrawn as a switch, a text field given suggestions.
-5. The role and the label with its counts and times read as placeholders:
-   `Like (0 likes)` finds `Like (1 like)`, and `Bob · 2m` finds `Bob · now`.
-   A number that names something is kept, so `Delete item 3` never finds
-   `Delete item 4`.
 
 A control matched this way must be found the same way on a second look a
 moment later, so a page still leaving is never acted on. The recorded row
@@ -103,8 +99,7 @@ A control recorded by its role alone, with no name, text, placeholder, or
 test id, has no fallback.
 
 A replay that used a fallback and passed re-records the step in
-`read-write` mode, so the next run matches exactly. A label whose count or
-time moved is not re-recorded, since it moves again on the next run. In `read-only` mode the
+`read-write` mode, so the next run matches exactly. In `read-only` mode the
 entry keeps replaying through the fallback; `step.cache.relocated` shows
 which steps to re-record.
 
@@ -354,8 +349,7 @@ step never recorded (a new or edited instruction or params), a retry, a
 its end-state checks it passes with no model call, and when it fails an
 action or the end state it fails like any other replay. `relocated` in the
 run summary counts the steps that needed one; `step.cache.relocated` in the
-report names them. A step whose label only changed in a count or a time
-relocates on every run and needs no re-recording. `REPLAY_STALE` exits 2 and is not retried, since a
+report names them. `REPLAY_STALE` exits 2 and is not retried, since a
 retry never replays and would pass live. The entry stays where it is, even
 in `read-write` mode, so every strict run fails on it until it is re-recorded:
 run the test in `read-write` mode without the flag, and with `cache.strict`

@@ -75,13 +75,12 @@ most stable evidence first. The first rung that settles on exactly one node
 | Test id | `testId` | copy and role changes | `test-id` |
 | Accessible | `role`, `name` | test id, placeholder, or text changes | `accessible` |
 | Role family | `name`, role in the same family | `link` to `button`, `checkbox` to `switch`, `textbox` to `combobox` | `role-family` |
-| Label shape | `role`, the shape of the name (else the text) | a tally or time in the label: `Like (0 likes)` to `Like (1 like)`, `Bob · 2m` to `Bob · now` | `label-shape` |
 
-The label shape (`label-shape.ts`) folds only a count governing a noun and
-a relative time or age. A number that names rather than counts stays as it
-reads: `Delete item 3` never finds `Delete item 4`, nor `Page 2` `Page 3`,
-nor `Count: 1` `Count: 0`. A label that is nothing but a time compares as it
-reads.
+Every rung compares fields as they read. There is deliberately no rung that
+reads a label by its shape (`Like (0 likes)` as `Like (1 like)`): it needs
+word rules (plurals, relative times, which numbers count and which name),
+review found it matching `Open item 3 menu` to `Open item 4 menu`, and a
+control whose label carries state is better served by a test id.
 
 What never loosens:
 
@@ -119,9 +118,7 @@ recordings made on another day.
 ### Healing
 
 A replay that passed after a fallback re-records the step in `read-write`
-mode instead of keeping the entry, unless the only drift was a tally or a
-time in a label (`transient`), which moves again on the next run and would
-rewrite the entry every time. The dispatch records every replayed action
+mode instead of keeping the entry. The dispatch records every replayed action
 against the live node, so the staged trace carries today's descriptors and
 anchors, and the next run matches exactly. The entry is written only once a
 later verification confirms it, like any recording. In `read-only` mode the
@@ -241,7 +238,7 @@ A write is skipped when the stored entry already holds the same flow
 
 | Area | Tests |
 | --- | --- |
-| Ladder, conflicts, `within`, position, label shapes | `tests/unit/relocate-ladder.test.ts`, `relocate-*.test.ts` |
+| Ladder, conflicts, `within`, position | `tests/unit/relocate-ladder.test.ts`, `relocate-*.test.ts` |
 | Replay engine, second look, scrolls, points | `tests/unit/trace-replay.test.ts` |
 | Anchors and shapes | `tests/unit/trace-anchors.test.ts` |
 | Routes | `tests/unit/trace-route.test.ts`, `trace-decide.test.ts` |
@@ -267,19 +264,20 @@ table when a rule here changes, and run it on `main` and the branch.
 | items | `Delete item 3` gone, `Delete item 4` left | `target-not-found`, item 4 untouched |
 | form | field id `mat-input-2` moves to another field | replays by label |
 | testid | `Save` relabeled `Save changes`, same test id | replays, `test-id`, heals |
-| likes | `Like (0 likes)` to `Like (3 likes)` | replays, `label-shape`, not healed |
+| likes | `Like (0 likes)` to `Like (3 likes)`, no test id | hands off (no shape rung) |
 | settings | link becomes a button | replays, `role-family`, heals |
 | clock | none; the effect reads the time | replays (failed every run before anchor shapes) |
 | async | none; the control renders 1.2 s after load | replays after relocation polling |
 | shuffle | none; rows in random order | replays on the named row |
-| ago | `posted 2m ago` to `posted 5m ago` | replays, `label-shape`, not healed |
+| ago | `posted 2m ago` to `posted 5m ago`, no test id | hands off (no shape rung) |
 | confirm | a new confirm dialog after Delete | `end-mismatch` on the new alert, evicted, re-recorded |
 | removed | the control is gone | `target-not-found` |
 | ab | label picked per load under a stable test id | replays, `test-id` |
 
-Last run 2026-10-04: every row as expected on this branch; `main` handed off
-or missed on testid, likes, settings, clock, ago, and on ab when the label
-flipped, with 16 model calls to the branch's 5.
+Last run 2026-10-04, before the shape rung was dropped (likes and ago then
+replayed through it): every other row as expected on this branch; `main`
+handed off or missed on testid, settings, clock, and on ab when the label
+flipped.
 
 ## Audit, 2026-10-03
 
@@ -287,7 +285,8 @@ A full read of the subsystem, with an independent bug hunt that proved each
 finding with a probe against the real modules.
 
 PR #637 (`oskar/cache-relocate-label-drift`) took the first run at label
-drift. This change keeps its label fold and its twins rule, and its drift
+drift. This change keeps its twins rule (its label fold was tried and
+dropped, see Relocation), and its drift
 probe (a scratch server whose pages differ between a recording run and a
 replay run) is how the ladder was checked end to end. It leaves out #637's
 element id rung: the same probe showed framework counter ids (`mat-input-2`)
@@ -326,9 +325,10 @@ Open, by decision or for later:
   `--no-cache` with it.
 - `within` never loosens. A row whose first text changed makes its controls
   unreachable until a re-record. Loosening it risks acting on the wrong row.
-- A label with a count the tally fold does not read (`Inbox (3)`, a bare
-  number) and a stable test id replays through the test id rung and heals
-  every `read-write` run, which rewrites the entry each time.
+- A label that carries state (`Inbox (3)`, `Like (0 likes)`, `Bob · 2m`)
+  with a stable test id replays through the test id rung and heals every
+  `read-write` run, which rewrites the entry each time. Without a test id
+  it hands off once the state moves.
 - The non-test-id rungs accept a candidate whose own test id differs from
   the recorded one, as the re-minted tier always has. A real, stable test id
   that changed on purpose is caught only by the end anchors.

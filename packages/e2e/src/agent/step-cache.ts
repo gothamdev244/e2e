@@ -166,10 +166,8 @@ export class StepTraceSession {
   private replayedWhole = false;
   /**
    * True once a replay found some control only by a fallback rung
-   * (`relocateRecorded`) and the control drifted beyond a tally or a time in
-   * its label (`ReplayOutcome.stale`): a step it still finished re-records
-   * rather than keeping the drifted entry. A label whose count moves every
-   * run would otherwise rewrite the entry on every run.
+   * (`relocateRecorded`): a step it still finished re-records rather than
+   * keeping the drifted entry.
    */
   private replayDrifted = false;
   /** The action names of the entry the step replayed, to line the replay's own recording up with it. */
@@ -324,8 +322,8 @@ export class StepTraceSession {
    *   keep. Confirmed, it is left as it stands; re-writing it would change
    *   only its `createdAt`, dirtying a committed cache directory on every
    *   run. Unconfirmed, it is evicted like a new recording would be. A
-   *   replay that found a control only by a fallback rung, drifted beyond a
-   *   tally or a time in its label, re-records instead: the dispatch recorded every replayed action against the live
+   *   replay that found a control only by a fallback rung re-records
+   *   instead: the dispatch recorded every replayed action against the live
    *   controls, so the staged trace carries today's descriptors and anchors,
    *   and the next run matches exactly rather than drifting further from a
    *   recording only the fallbacks still reach.
@@ -548,7 +546,7 @@ export class StepTraceSession {
 
   private selfFinalize(trace: ActionTrace, outcome: ReplayOutcome): StepVerdict {
     this.replayedWhole = true;
-    this.replayDrifted = outcome.stale === true;
+    this.replayDrifted = outcome.relocated !== undefined;
     this.info = {
       mode: 'self-finalized',
       replayedActions: outcome.executed,
